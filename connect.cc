@@ -1,3 +1,7 @@
+//HOW TO RUN: 
+//g++ -o output $(mysql_config --cflags) connect.cc $(mysql_config --libs)
+// ./output
+
 #include <stdio.h>
 #include <stdlib.h>
 
