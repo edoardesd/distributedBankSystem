@@ -45,6 +45,7 @@ class Txc4 : public cSimpleModule
 
     //MYSQL *conn;
     MYSQL_RES *res;
+    MYSQL_RES *query;
     MYSQL_ROW row;
     MYSQL * conn = mysql_init(NULL);
 };
@@ -86,9 +87,26 @@ void Txc4::initialize()
         printf("MySQL Tables in mysql database:\n");
         while ((row = mysql_fetch_row(res)) != NULL){
             EV << "the rows is " << row[0] << " ok\n";
-
+ 
             printf("%s \n", row[0]);
         }
+
+        if (mysql_query(conn, "SELECT name, balance FROM people WHERE id = 1")) {
+            fprintf(stderr, "%s\n", mysql_error(conn));
+            exit(1);
+        }
+
+        query = mysql_use_result(conn);
+
+        /* output table name */
+        printf("MySQL Tables in mysql database:\n");
+        while ((row = mysql_fetch_row(query)) != NULL){
+            EV << "the rows is " << row[0] << " ok\n";
+ 
+            for (int i=0; i<2; i++)
+            printf("%s ", row[i] );
+        }
+
 
         }
 }
