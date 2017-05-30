@@ -12,7 +12,7 @@ simple Person {
         @display("i=block/routing");
     
     gates:
-    	inout gateP[];
+    	inout gate[];
 }
 
 simple A extends Person{
@@ -52,22 +52,25 @@ network Tictoc12{
 	personB: B;
 
     connections:
+    
+	personA.gate++ <--> Channel <--> db[0].gate++;
         db[0].gate++ <--> Channel <--> db[1].gate++;
         db[0].gate++ <--> Channel <--> db[2].gate++;
         db[0].gate++ <--> Channel <--> db[3].gate++;
-        db[1].gate++ <--> Channel <--> db[3].gate++;
+        
+        personA.gate++ <--> Channel <--> db[1].gate++;
         db[1].gate++ <--> Channel <--> db[2].gate++;
+        db[1].gate++ <--> Channel <--> db[3].gate++;
+        
+        personA.gate++ <--> Channel <--> db[2].gate++;
         db[2].gate++ <--> Channel <--> db[3].gate++;
 
-	personA.gateP++ <--> Channel <--> db[0].gate++;
-	personA.gateP++ <--> Channel <--> db[1].gate++;
-	personA.gateP++ <--> Channel <--> db[2].gate++;
-	personA.gateP++ <--> Channel <--> db[3].gate++;
+	personA.gate++ <--> Channel <--> db[3].gate++;
 	
-	personB.gateP++ <--> Channel <--> db[0].gate++;
-	personB.gateP++ <--> Channel <--> db[1].gate++;
-	personB.gateP++ <--> Channel <--> db[2].gate++;
-	personB.gateP++ <--> Channel <--> db[3].gate++;
+	personB.gate++ <--> Channel <--> db[0].gate++;
+	personB.gate++ <--> Channel <--> db[1].gate++;
+	personB.gate++ <--> Channel <--> db[2].gate++;
+	personB.gate++ <--> Channel <--> db[3].gate++;
 
 
 

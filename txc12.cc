@@ -74,6 +74,14 @@ void DB::forwardMessage(TicTocMsg13 *msg)
 	int n = gateSize("gate");
 	int k = intuniform(0, n-1);
 
+	if (k == getIndex()){
+		k++;
+		if (k>gateSize("gate")){
+			k--;
+			k--; 
+		}
+	}
+
 	printf ("Gate size: %d\tDestination: %d \tIndex: %d\n", n, k, getIndex());
 
 	EV << "Forwarding message " << msg << " on gate[" << k << "]\n";
@@ -82,7 +90,9 @@ void DB::forwardMessage(TicTocMsg13 *msg)
 	//printf("Hop count: %d \n", msg->getHopCount());
 
 	// $o and $i suffix is used to identify the input/output part of a two way gate
-	send(msg, "gate$o", k);
+	send(msg, "gate$o", getIndex());
+	bubble("send message");
+
 	
 }
 
@@ -106,7 +116,7 @@ Define_Module(Person);
 
 void Person::initialize()
 {
-	printf ("my gatesize %d", gateSize("gateP"));
+	printf ("my gatesize %d", gateSize("gate"));
 	EV << "HI, I'm number " << getIndex() << "\n";
 	printf("HI, I'm number %d \n", getIndex());
 	if (par("sendMsgOnInit").boolValue() == true) {
@@ -114,11 +124,11 @@ void Person::initialize()
 		EV << "Sending initial self message from " << getName() <<"\n";
 		//char msgname[20];
 		//sprintf(msgname, "msg-%s", getName()); //getIndex is the number that identify the node (itself)
-        int n = gateSize("gateP");
+        int n = gateSize("gate");
 		for (int k = 0; k<n; k = k+1){
 			// $o and $i suffix is used to identify the input/output part of a two way gate
 			TicTocMsg13 *msg_forw = generateMessage(getIndex(), k);
-			send(msg_forw, "gateP$o", k);
+			send(msg_forw, "gate$o", k);
 			printf("Forwarding message on gate[%d]\n", k);
 
 			bubble("send message");
@@ -134,11 +144,11 @@ void Person::forwardMessage(TicTocMsg13 *msg)
 	// We draw a random number between 0 and the size of gate `gate[]'.
 	//EV << "I'm number " << getIndex() << "\n";
 
-	int n = gateSize("gateP");
+	int n = gateSize("gate");
 	for (int k = 0; k<n; k = k+1){
 		// $o and $i suffix is used to identify the input/output part of a two way gate
 		TicTocMsg13 *msg_forw = generateMessage(getIndex(), k);
-		send(msg_forw, "gateP$o", k);
+		send(msg_forw, "gate$o", k);
 		printf("Forwarding message on gate[%d]\n", k);
 
 		bubble("send message");
