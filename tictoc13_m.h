@@ -20,8 +20,15 @@
  * <pre>
  * message TicTocMsg13
  * {
- *     int source;
+ *     char source;
  *     int destination;
+ *     char receiver;
+ * 
+ *     int pid;
+ *     long amount;
+ * 
+ * 
+ * 
  *     int hopCount = 0;
  * }
  * </pre>
@@ -29,8 +36,11 @@
 class TicTocMsg13 : public ::omnetpp::cMessage
 {
   protected:
-    int source;
+    char source;
     int destination;
+    char receiver;
+    int pid;
+    long amount;
     int hopCount;
 
   private:
@@ -50,10 +60,16 @@ class TicTocMsg13 : public ::omnetpp::cMessage
     virtual void parsimUnpack(omnetpp::cCommBuffer *b);
 
     // field getter/setter methods
-    virtual int getSource() const;
-    virtual void setSource(int source);
+    virtual char getSource() const;
+    virtual void setSource(char source);
     virtual int getDestination() const;
     virtual void setDestination(int destination);
+    virtual char getReceiver() const;
+    virtual void setReceiver(char receiver);
+    virtual int getPid() const;
+    virtual void setPid(int pid);
+    virtual long getAmount() const;
+    virtual void setAmount(long amount);
     virtual int getHopCount() const;
     virtual void setHopCount(int hopCount);
 };

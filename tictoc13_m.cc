@@ -167,6 +167,9 @@ TicTocMsg13::TicTocMsg13(const char *name, int kind) : ::omnetpp::cMessage(name,
 {
     this->source = 0;
     this->destination = 0;
+    this->receiver = 0;
+    this->pid = 0;
+    this->amount = 0;
     this->hopCount = 0;
 }
 
@@ -191,6 +194,9 @@ void TicTocMsg13::copy(const TicTocMsg13& other)
 {
     this->source = other.source;
     this->destination = other.destination;
+    this->receiver = other.receiver;
+    this->pid = other.pid;
+    this->amount = other.amount;
     this->hopCount = other.hopCount;
 }
 
@@ -199,6 +205,9 @@ void TicTocMsg13::parsimPack(omnetpp::cCommBuffer *b) const
     ::omnetpp::cMessage::parsimPack(b);
     doParsimPacking(b,this->source);
     doParsimPacking(b,this->destination);
+    doParsimPacking(b,this->receiver);
+    doParsimPacking(b,this->pid);
+    doParsimPacking(b,this->amount);
     doParsimPacking(b,this->hopCount);
 }
 
@@ -207,15 +216,18 @@ void TicTocMsg13::parsimUnpack(omnetpp::cCommBuffer *b)
     ::omnetpp::cMessage::parsimUnpack(b);
     doParsimUnpacking(b,this->source);
     doParsimUnpacking(b,this->destination);
+    doParsimUnpacking(b,this->receiver);
+    doParsimUnpacking(b,this->pid);
+    doParsimUnpacking(b,this->amount);
     doParsimUnpacking(b,this->hopCount);
 }
 
-int TicTocMsg13::getSource() const
+char TicTocMsg13::getSource() const
 {
     return this->source;
 }
 
-void TicTocMsg13::setSource(int source)
+void TicTocMsg13::setSource(char source)
 {
     this->source = source;
 }
@@ -228,6 +240,36 @@ int TicTocMsg13::getDestination() const
 void TicTocMsg13::setDestination(int destination)
 {
     this->destination = destination;
+}
+
+char TicTocMsg13::getReceiver() const
+{
+    return this->receiver;
+}
+
+void TicTocMsg13::setReceiver(char receiver)
+{
+    this->receiver = receiver;
+}
+
+int TicTocMsg13::getPid() const
+{
+    return this->pid;
+}
+
+void TicTocMsg13::setPid(int pid)
+{
+    this->pid = pid;
+}
+
+long TicTocMsg13::getAmount() const
+{
+    return this->amount;
+}
+
+void TicTocMsg13::setAmount(long amount)
+{
+    this->amount = amount;
 }
 
 int TicTocMsg13::getHopCount() const
@@ -304,7 +346,7 @@ const char *TicTocMsg13Descriptor::getProperty(const char *propertyname) const
 int TicTocMsg13Descriptor::getFieldCount() const
 {
     omnetpp::cClassDescriptor *basedesc = getBaseClassDescriptor();
-    return basedesc ? 3+basedesc->getFieldCount() : 3;
+    return basedesc ? 6+basedesc->getFieldCount() : 6;
 }
 
 unsigned int TicTocMsg13Descriptor::getFieldTypeFlags(int field) const
@@ -319,8 +361,11 @@ unsigned int TicTocMsg13Descriptor::getFieldTypeFlags(int field) const
         FD_ISEDITABLE,
         FD_ISEDITABLE,
         FD_ISEDITABLE,
+        FD_ISEDITABLE,
+        FD_ISEDITABLE,
+        FD_ISEDITABLE,
     };
-    return (field>=0 && field<3) ? fieldTypeFlags[field] : 0;
+    return (field>=0 && field<6) ? fieldTypeFlags[field] : 0;
 }
 
 const char *TicTocMsg13Descriptor::getFieldName(int field) const
@@ -334,9 +379,12 @@ const char *TicTocMsg13Descriptor::getFieldName(int field) const
     static const char *fieldNames[] = {
         "source",
         "destination",
+        "receiver",
+        "pid",
+        "amount",
         "hopCount",
     };
-    return (field>=0 && field<3) ? fieldNames[field] : nullptr;
+    return (field>=0 && field<6) ? fieldNames[field] : nullptr;
 }
 
 int TicTocMsg13Descriptor::findField(const char *fieldName) const
@@ -345,7 +393,10 @@ int TicTocMsg13Descriptor::findField(const char *fieldName) const
     int base = basedesc ? basedesc->getFieldCount() : 0;
     if (fieldName[0]=='s' && strcmp(fieldName, "source")==0) return base+0;
     if (fieldName[0]=='d' && strcmp(fieldName, "destination")==0) return base+1;
-    if (fieldName[0]=='h' && strcmp(fieldName, "hopCount")==0) return base+2;
+    if (fieldName[0]=='r' && strcmp(fieldName, "receiver")==0) return base+2;
+    if (fieldName[0]=='p' && strcmp(fieldName, "pid")==0) return base+3;
+    if (fieldName[0]=='a' && strcmp(fieldName, "amount")==0) return base+4;
+    if (fieldName[0]=='h' && strcmp(fieldName, "hopCount")==0) return base+5;
     return basedesc ? basedesc->findField(fieldName) : -1;
 }
 
@@ -358,11 +409,14 @@ const char *TicTocMsg13Descriptor::getFieldTypeString(int field) const
         field -= basedesc->getFieldCount();
     }
     static const char *fieldTypeStrings[] = {
+        "char",
         "int",
+        "char",
         "int",
+        "long",
         "int",
     };
-    return (field>=0 && field<3) ? fieldTypeStrings[field] : nullptr;
+    return (field>=0 && field<6) ? fieldTypeStrings[field] : nullptr;
 }
 
 const char **TicTocMsg13Descriptor::getFieldPropertyNames(int field) const
@@ -417,7 +471,10 @@ std::string TicTocMsg13Descriptor::getFieldValueAsString(void *object, int field
     switch (field) {
         case 0: return long2string(pp->getSource());
         case 1: return long2string(pp->getDestination());
-        case 2: return long2string(pp->getHopCount());
+        case 2: return long2string(pp->getReceiver());
+        case 3: return long2string(pp->getPid());
+        case 4: return long2string(pp->getAmount());
+        case 5: return long2string(pp->getHopCount());
         default: return "";
     }
 }
@@ -434,7 +491,10 @@ bool TicTocMsg13Descriptor::setFieldValueAsString(void *object, int field, int i
     switch (field) {
         case 0: pp->setSource(string2long(value)); return true;
         case 1: pp->setDestination(string2long(value)); return true;
-        case 2: pp->setHopCount(string2long(value)); return true;
+        case 2: pp->setReceiver(string2long(value)); return true;
+        case 3: pp->setPid(string2long(value)); return true;
+        case 4: pp->setAmount(string2long(value)); return true;
+        case 5: pp->setHopCount(string2long(value)); return true;
         default: return false;
     }
 }

@@ -10,8 +10,15 @@
 
 message TicTocMsg13
 {
-    int source;
+    char source;
     int destination;
+    char receiver;
+    
+    int pid;
+    long amount;
+    
+
+    
     int hopCount = 0;
 }
 
