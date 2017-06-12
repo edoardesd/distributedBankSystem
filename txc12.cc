@@ -15,6 +15,7 @@
 //
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <omnetpp.h>
 #include <mysql/mysql.h>
@@ -40,7 +41,12 @@ class DB : public cSimpleModule
 	virtual TicTocMsg13 *generateMessage(int src, int dest, long my_amount, char my_rec);
 	
 	virtual MYSQL *createConnection(char *db_name);
+	virtual MYSQL *handleConnection(int my_db);
 	virtual int read_balance(char* my_query, MYSQL *connection);
+	virtual bool check_balance(int my_amount, char source);
+	virtual char *create_query(char *first_part, char name_part);
+	virtual char *create_update(char *first_part, char *second_part, int amount, char name_part);
+	virtual void update_balance(int transaction_amount, char source, char destination);
 	virtual void finish_with_error(MYSQL *con);
 
 	unsigned int port = 3306;
@@ -66,17 +72,16 @@ MYSQL *DB::createConnection(char *db_name){
 		exit(1);
 	}  
 
-
-
-	if (!mysql_real_connect(con, "localhost", "root", "distributedpass", db_name, port, unix_socket, flag)){
+	if (!mysql_real_connect(con, "localhost", "root", "distributedpass", 
+				db_name, port, unix_socket, CLIENT_MULTI_STATEMENTS)){
 			finish_with_error(con);
 		}
 		else{
-			printf("Connection with the database established\n" );
+			printf("\nConnection with the database established\n" );
 
 			return con;
 		}
-
+	return NULL;
 }
 
 void DB::finish_with_error(MYSQL *con){
@@ -94,57 +99,149 @@ void DB::initialize()
 	
 }
 
+MYSQL *DB::handleConnection(int my_db){
+
+	MYSQL *con;
+	switch (my_db){
+		case 0: 
+			con = createConnection((char*)"bank0");
+			return con;
+
+		case 1:
+			con = createConnection((char*)"bank1");
+			return con;
+
+		case 2:
+			con = createConnection((char*)"bank2");
+			return con;
+
+		case 3:
+			con = createConnection((char*)"bank3");
+			return con;
+
+		default: 
+			printf("\n50m3th1ng g035 wr0ng!\n");
+			con = NULL;
+	}
+	return con;
+
+}
+
 void DB::handleMessage(cMessage *msg)
 {
 	TicTocMsg13 *ttmsg = check_and_cast<TicTocMsg13 *>(msg);
 
-	printf("\nI received a message");
+	printf("\n%d received a message", getIndex());
+	int msg_type = ttmsg->getMsg_type();
+	long amount = ttmsg->getAmount();
+	char msg_source = ttmsg->getSource();
+	char msg_receiver = ttmsg->getReceiver(); //e.g. B
 
-	printf("\nSource %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld", 
-		ttmsg->getSource(), ttmsg->getDestination(), ttmsg->getReceiver(), ttmsg->getPid(), ttmsg->getAmount());
+	if (msg_type == 1){
+		printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
+			msg_type, msg_source, ttmsg->getDestination(), msg_receiver, ttmsg->getPid(), amount);
 
-	delete ttmsg;
+		delete ttmsg;
 
-	MYSQL *con;
-	//add msg type
-	switch (getIndex()){
-		case 0: 
-			con = createConnection((char*)"bank0");
-			break;
+		if(check_balance(amount, msg_source)){
+			printf("Balance ok, let's do something\n");
+			//UPDATE BALANCE
+			update_balance(amount, msg_source, msg_receiver);
+			//UPDATE table SET field = field + 1 WHERE id = $number
+		}
+		else{
+			printf("Your balance is equal or less than 0, ERROR!\n");
+			//DO SOMETHING
+		}
 
-		case 1:
-			con =createConnection((char*)"bank1");
-			break;
-
-		case 2:
-			con =createConnection((char*)"bank2");
-			break;
-
-		case 3:
-			con =createConnection((char*)"bank3");
-			break;
-
-		default: 
-			printf("\n50m3th1ng g035 wr0ng!\n");
+		
 	}
+
+}
+
+void DB::update_balance(int transaction_amount, char source, char destination){
+	MYSQL *con = handleConnection(getIndex());
+	//UPDATE people SET balance = balance + transaction_amount WHERE name = source"
+	char *increase_part = (char*)"UPDATE people SET balance = balance + ";
+	char *decrease_part = (char*)"UPDATE people SET balance = balance - ";
+	char *middle_part = (char*)" WHERE name = \'";
 	
-	char *query_string = (char*)"SELECT balance FROM people WHERE name=\"A\"";
+	char *increase_query = create_update(increase_part, middle_part, transaction_amount, destination);
+	char *decrease_query = create_update(decrease_part, middle_part, transaction_amount, source);
+	
 
-	int actual_balance = read_balance(query_string, con);
+	if (mysql_query(con, decrease_query)){    
+      finish_with_error(con);
+  	}
+  	else if (mysql_query(con, increase_query)){    
+      finish_with_error(con);
+  	}
+}
 
+char * DB::create_update(char *first_part, char *second_part, int amount, char name_part){
+	char *close_query = (char*)"\'";
+	char char_amount[10];
+	sprintf(char_amount,"%d",amount); //convert int to a string
+
+	size_t len = strlen(first_part);
+
+	char * update_with_bal = (char *) malloc(1 + strlen(first_part) +strlen(char_amount)+strlen(second_part));
+	strcpy(update_with_bal, first_part);
+ 	strcat(update_with_bal, char_amount);
+ 	strcat(update_with_bal, second_part);
+
+	len = strlen(update_with_bal);
+
+	char * update_with_name = (char *) malloc(1 + strlen(update_with_bal) +1);
+	strcpy(update_with_name, update_with_bal);
+ 	update_with_name[len] = name_part;
+ 	update_with_name[len + 1] = '\0';
+
+
+ 	char * update_query = (char *) malloc(1 + strlen(update_with_name) +strlen(close_query));
+	strcpy(update_query, update_with_name);
+	strcat(update_query, close_query);
+	
+	return (char*)update_query;
+}
+
+bool DB::check_balance(int my_amount, char source){
+	MYSQL *con = handleConnection(getIndex());
+
+	char *query_part = (char*)"SELECT balance FROM people WHERE name=\"";
+		
+	char *balance_query = create_query(query_part, source);
+
+	int balance = read_balance(balance_query, con);
+
+	if (balance - my_amount > 0){
+		return true;
+		
+	}
+	else {
+		return false;
+	}
+}
+
+char * DB::create_query(char *first_part, char name_part){
+	char *close_query = (char*)"\"";
+		
+	size_t len = strlen(first_part);
+
+	char * query_with_name = (char *) malloc(1 + strlen(first_part) +1);
+	strcpy(query_with_name, first_part);
+ 	query_with_name[len] = name_part;
+
+    query_with_name[len + 1] = '\0';
+	char * query_string = (char *) malloc(1 + strlen(query_with_name) +strlen(close_query));
+	strcpy(query_string, query_with_name);
+	strcat(query_string, close_query);
+
+	return (char*)query_string;
 }
 
 int DB::read_balance(char* my_query, MYSQL *connection){
 	int query_balance;
-
-	/*
-	if (!mysql_real_connect(conn, "localhost", "root", "distributedpass", "bank", port, unix_socket, flag)){
-			EV << "Connection error\n";
-		   finish_with_error(conn);
-	}else{
-			printf("Connection with the database established\n" );
-		}
-	*/
 
 	if (mysql_query(connection, my_query)){
 		fprintf(stderr, "1\n\n");
@@ -164,7 +261,6 @@ int DB::read_balance(char* my_query, MYSQL *connection){
       		for(int i = 0; i < num_fields; i++){ 
           		
           		query_balance = std::stoi(row[i]);
-          		//printf("%d ", query_balance); 
 
       		} 
           	printf("\n"); 
@@ -174,7 +270,7 @@ int DB::read_balance(char* my_query, MYSQL *connection){
   		mysql_close(connection);
   		fprintf(stderr, "Closing connection\n\n");
 
-  		fprintf(stderr, "%d\n", query_balance);
+  		//fprintf(stderr, "%d\n", query_balance);
   		return query_balance;
 }
 
@@ -224,9 +320,10 @@ void Person::initialize()
 		// Boot the process scheduling the initial message as a self-message.
 		
 		int n = gateSize("gate");
-		long amount = 200;
+		long amount = 5;
 		char receiver = 'B';
 
+		//Broadcast message = 99
 		TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver);
 		for (int k = 0; k<n; k = k+1){
 			// $o and $i suffix is used to identify the input/output part of a two way gate
@@ -234,10 +331,7 @@ void Person::initialize()
 			TicTocMsg13 *copy = msg->dup();
 			send(copy, "gate$o", k);
 			
-			printf("Send message on gate[%d]\n", k);
-			bubble("send message");
-			printf("Process ID: %d\n", msg->getPid() );
-
+			bubble("Send message");
 		}
 	}
 }
@@ -274,6 +368,7 @@ void Person::handleMessage(cMessage *msg)
 TicTocMsg13 *Person::generateMessage(char src, int dest, long my_balance, char my_rec)
 {
 	TicTocMsg13 *msg = new TicTocMsg13("msg_gen");
+	msg->setMsg_type(1);
 	msg->setSource(src);
 	msg->setDestination(dest);
 	msg->setAmount(my_balance);

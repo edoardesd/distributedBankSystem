@@ -6,10 +6,15 @@
 //
 // This file is distributed WITHOUT ANY WARRANTY. See the file
 // `license' for details on this and other legal matters.
-//
+//HOW TO COMPILE
+//opp_msgc tictoc13.msg
 
 message TicTocMsg13
 {
+
+	int msg_type;
+
+
     char source;
     int destination;
     char receiver;
@@ -17,8 +22,10 @@ message TicTocMsg13
     int pid;
     long amount;
     
-
     
     int hopCount = 0;
 }
 
+//msg_type
+//1: message from A to db
+//2: message from db to db

@@ -53,7 +53,7 @@ network Tictoc12{
 
     connections:
     
-	personA.gate++ <--> Channel <--> db[0].gate++;
+	    personA.gate++ <--> Channel <--> db[0].gate++;
         db[0].gate++ <--> Channel <--> db[1].gate++;
         db[0].gate++ <--> Channel <--> db[2].gate++;
         db[0].gate++ <--> Channel <--> db[3].gate++;
@@ -65,12 +65,12 @@ network Tictoc12{
         personA.gate++ <--> Channel <--> db[2].gate++;
         db[2].gate++ <--> Channel <--> db[3].gate++;
 
-	personA.gate++ <--> Channel <--> db[3].gate++;
+	    personA.gate++ <--> Channel <--> db[3].gate++;
 	
-	personB.gate++ <--> Channel <--> db[0].gate++;
-	personB.gate++ <--> Channel <--> db[1].gate++;
-	personB.gate++ <--> Channel <--> db[2].gate++;
-	personB.gate++ <--> Channel <--> db[3].gate++;
+	    personB.gate++ <--> Channel <--> db[0].gate++;
+	    personB.gate++ <--> Channel <--> db[1].gate++;
+	    personB.gate++ <--> Channel <--> db[2].gate++;
+	    personB.gate++ <--> Channel <--> db[3].gate++;
 
 
 
