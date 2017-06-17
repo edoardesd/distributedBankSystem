@@ -17,6 +17,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <omnetpp.h>
 #include <mysql/mysql.h>
 #include "tictoc13_m.h"
@@ -38,8 +39,10 @@ class DB : public cSimpleModule
 	virtual void forwardMessage(TicTocMsg13 *msg);
 	virtual void initialize() override;
 	virtual void handleMessage(cMessage *msg);
-	virtual TicTocMsg13 *generateMessage(int src, int dest, long my_amount, char my_rec);
-	
+	virtual ErrorMessage *generateErrMessage(int src, char dest, int err_pid);
+	virtual TicTocMsg13 *generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid);
+	virtual TicTocMsg13 *generateMessage(int self, int my_type, char src, char rec, int pid);
+
 	virtual MYSQL *createConnection(char *db_name);
 	virtual MYSQL *handleConnection(int my_db);
 	virtual int read_balance(char* my_query, MYSQL *connection);
@@ -49,10 +52,11 @@ class DB : public cSimpleModule
 	virtual void update_balance(int transaction_amount, char source, char destination);
 	virtual void finish_with_error(MYSQL *con);
 
+  private:
 	unsigned int port = 3306;
 	unsigned int flag = 0;
 	int num_fields;
-
+	cMessage *event;
 
 	//MYSQL *conn;
 	MYSQL_RES *res;
@@ -127,36 +131,80 @@ MYSQL *DB::handleConnection(int my_db){
 
 }
 
-void DB::handleMessage(cMessage *msg)
-{
+void DB::handleMessage(cMessage *msg){
+	// Create the event object we'll use for timing -- just any ordinary message.
+    event = new cMessage("timeout");
+
 	TicTocMsg13 *ttmsg = check_and_cast<TicTocMsg13 *>(msg);
 
 	printf("\n%d received a message", getIndex());
 	int msg_type = ttmsg->getMsg_type();
-	long amount = ttmsg->getAmount();
-	char msg_source = ttmsg->getSource();
-	char msg_receiver = ttmsg->getReceiver(); //e.g. B
+	
+
+	if (msg_type == 0) {
+		printf("\nEnd Timer\n");
+		char msg_source = ttmsg->getSource();
+		char msg_receiver = ttmsg->getReceiver(); //e.g. B
+		int msg_pid = ttmsg->getPid();
+
+		delete ttmsg;
+		//send msg to other dbs
+		MYSQL *con = handleConnection(getIndex());
+
+				
+		char *part_one = (char*)"SELECT balance FROM people WHERE name=\"";
+		char *balance_check= create_query(part_one, msg_source);
+		long sender_amount = read_balance(balance_check, con);
+
+		con = handleConnection(getIndex());
+
+		balance_check = create_query(part_one, msg_receiver);
+		long receiver_amount = read_balance(balance_check, con);
+				
+		int n = gateSize("gate");
+		for (int k = 1; k<n-1; k = k+1){ 
+			TicTocMsg13 *msg_check = generateMessage(getIndex(), k, sender_amount, receiver_amount, msg_pid);
+			send(msg_check, "gate$o", k);
+			printf("\nSend check msg to %d", k);
+			bubble("Send check message");
+		}
+	}
 
 	if (msg_type == 1){
+		long amount = ttmsg->getAmount();
+		char msg_source = ttmsg->getSource();
+		char msg_receiver = ttmsg->getReceiver(); //e.g. B
+		int msg_pid = ttmsg->getPid();
 		printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
-			msg_type, msg_source, ttmsg->getDestination(), msg_receiver, ttmsg->getPid(), amount);
+			msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
 
 		delete ttmsg;
 
 		if(check_balance(amount, msg_source)){
 			printf("Balance ok, let's do something\n");
-			//UPDATE BALANCE
 			update_balance(amount, msg_source, msg_receiver);
-			//UPDATE table SET field = field + 1 WHERE id = $number
+			//start timer
+			if (getIndex() == 0){
+				printf("\nStart Timer\n");
+				TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, msg_pid);
+				scheduleAt(simTime()+1.0, self_msg);
+				
+
+				
+	        }
+
 		}
 		else{
 			printf("Your balance is equal or less than 0, ERROR!\n");
-			//DO SOMETHING
+			ErrorMessage *msg = generateErrMessage(getIndex(), msg_source, msg_pid);
+			send(msg, "gate$o", getIndex()); //send a message to A
+			bubble("Send Error");
 		}
-
-		
 	}
 
+	if (msg_type == 2){
+		//DO 
+	}
 }
 
 void DB::update_balance(int transaction_amount, char source, char destination){
@@ -274,19 +322,38 @@ int DB::read_balance(char* my_query, MYSQL *connection){
   		return query_balance;
 }
 
-TicTocMsg13 *DB::generateMessage(int src, int dest, long my_balance, char my_rec)
-{
-	TicTocMsg13 *msg = new TicTocMsg13("msg_gen");
+ErrorMessage *DB::generateErrMessage(int src, char dest, int err_pid){
+	ErrorMessage *msg = new ErrorMessage("err_msg");
+	msg->setMsg_type(1);
 	msg->setSource(src);
 	msg->setDestination(dest);
-	msg->setAmount(my_balance);
-	msg->setReceiver(my_rec);
-	global_pid++;
-	msg->setPid(global_pid);
+	msg->setPid(err_pid);
+
+	return msg;
+}
+
+TicTocMsg13 *DB::generateMessage(int self, int my_type, char src, char rec, int pid){
+	TicTocMsg13 *msg = new TicTocMsg13("msg_self");
+	msg->setMsg_type(my_type);
+	msg->setDb_source(self);
+	msg->setSource(src);
+	msg->setReceiver(rec);
+	msg->setPid(pid);
 	return msg;
 }
 
 
+TicTocMsg13 *DB::generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid){
+	TicTocMsg13 *msg = new TicTocMsg13("msg_check");
+	msg->setMsg_type(2);
+	msg->setDb_source(src);
+	msg->setDestination(dest);
+	msg->setAmount(sndr_amnt);
+	msg->setAmount2(rec_amnt);	
+	msg->setPid(operation_pid);
+	return msg;
+
+}
 
 void DB::forwardMessage(TicTocMsg13 *msg)
 {
@@ -320,7 +387,7 @@ void Person::initialize()
 		// Boot the process scheduling the initial message as a self-message.
 		
 		int n = gateSize("gate");
-		long amount = 5;
+		long amount = 10;
 		char receiver = 'B';
 
 		//Broadcast message = 99
@@ -358,9 +425,10 @@ void Person::forwardMessage(TicTocMsg13 *msg)
 
 void Person::handleMessage(cMessage *msg)
 {
-	TicTocMsg13 *ttmsg = check_and_cast<TicTocMsg13 *>(msg);
+	ErrorMessage *ttmsg = check_and_cast<ErrorMessage *>(msg);
 
-	printf("Msg from %d come back with destination %d\n", ttmsg->getSource(), ttmsg->getDestination());
+	printf("Msg from %d come back with destination %c\n", ttmsg->getSource(), ttmsg->getDestination());
+	printf("You can't performe operation with pid %d\n", ttmsg->getPid());
 	//forwardMessage(ttmsg);
 
 }

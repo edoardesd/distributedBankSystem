@@ -9,19 +9,20 @@
 //HOW TO COMPILE
 //opp_msgc tictoc13.msg
 
-message TicTocMsg13
-{
-
+message TicTocMsg13{
 	int msg_type;
 
 
     char source;
+    int db_source;
+
     int destination;
     char receiver;
     
     int pid;
     long amount;
-    
+   	long amount2; //used when check balance -> //amount of second one
+
     
     int hopCount = 0;
 }
@@ -29,3 +30,12 @@ message TicTocMsg13
 //msg_type
 //1: message from A to db
 //2: message from db to db
+
+message ErrorMessage{
+	int msg_type;
+	int source;
+	char destination;
+
+    int pid;
+}
+
