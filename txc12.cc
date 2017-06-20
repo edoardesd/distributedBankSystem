@@ -40,12 +40,13 @@ class DB : public cSimpleModule
 	virtual void initialize() override;
 	virtual void handleMessage(cMessage *msg);
 	virtual ErrorMessage *generateErrMessage(int src, char dest, int err_pid);
-	virtual TicTocMsg13 *generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid);
+	virtual TicTocMsg13 *generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid, char source, char receiver);
 	virtual TicTocMsg13 *generateMessage(int self, int my_type, char src, char rec, int pid);
 
 	virtual MYSQL *createConnection(char *db_name);
 	virtual MYSQL *handleConnection(int my_db);
 	virtual int read_balance(char* my_query, MYSQL *connection);
+	virtual long balance_amount(char person);
 	virtual bool check_balance(int my_amount, char source);
 	virtual char *create_query(char *first_part, char name_part);
 	virtual char *create_update(char *first_part, char *second_part, int amount, char name_part);
@@ -81,7 +82,7 @@ MYSQL *DB::createConnection(char *db_name){
 			finish_with_error(con);
 		}
 		else{
-			printf("\nConnection with the database established\n" );
+			printf("\nConnection with the database established" );
 
 			return con;
 		}
@@ -132,38 +133,34 @@ MYSQL *DB::handleConnection(int my_db){
 }
 
 void DB::handleMessage(cMessage *msg){
+	char msg_source;
+	char msg_receiver;
 	// Create the event object we'll use for timing -- just any ordinary message.
     event = new cMessage("timeout");
 
 	TicTocMsg13 *ttmsg = check_and_cast<TicTocMsg13 *>(msg);
 
-	printf("\n%d received a message", getIndex());
+	printf("\n\n%d received a message", getIndex());
 	int msg_type = ttmsg->getMsg_type();
-	
+	printf(" of type %d\n", msg_type);
 
 	if (msg_type == 0) {
 		printf("\nEnd Timer\n");
-		char msg_source = ttmsg->getSource();
-		char msg_receiver = ttmsg->getReceiver(); //e.g. B
-		int msg_pid = ttmsg->getPid();
 
+		int msg_pid = ttmsg->getPid();
+		msg_source = ttmsg->getSource();
+		msg_receiver = ttmsg->getReceiver();
+		
 		delete ttmsg;
 		//send msg to other dbs
-		MYSQL *con = handleConnection(getIndex());
+		
+		long sender_amount = balance_amount(msg_source);
 
-				
-		char *part_one = (char*)"SELECT balance FROM people WHERE name=\"";
-		char *balance_check= create_query(part_one, msg_source);
-		long sender_amount = read_balance(balance_check, con);
-
-		con = handleConnection(getIndex());
-
-		balance_check = create_query(part_one, msg_receiver);
-		long receiver_amount = read_balance(balance_check, con);
+		long receiver_amount = balance_amount(msg_receiver);
 				
 		int n = gateSize("gate");
 		for (int k = 1; k<n-1; k = k+1){ 
-			TicTocMsg13 *msg_check = generateMessage(getIndex(), k, sender_amount, receiver_amount, msg_pid);
+			TicTocMsg13 *msg_check = generateMessage(getIndex(), k, sender_amount, receiver_amount, msg_pid, msg_source, msg_receiver);
 			send(msg_check, "gate$o", k);
 			printf("\nSend check msg to %d", k);
 			bubble("Send check message");
@@ -172,8 +169,8 @@ void DB::handleMessage(cMessage *msg){
 
 	if (msg_type == 1){
 		long amount = ttmsg->getAmount();
-		char msg_source = ttmsg->getSource();
-		char msg_receiver = ttmsg->getReceiver(); //e.g. B
+		msg_source = ttmsg->getSource();
+		msg_receiver = ttmsg->getReceiver(); //e.g. B
 		int msg_pid = ttmsg->getPid();
 		printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
 			msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
@@ -181,16 +178,14 @@ void DB::handleMessage(cMessage *msg){
 		delete ttmsg;
 
 		if(check_balance(amount, msg_source)){
-			printf("Balance ok, let's do something\n");
+			printf("\nBalance ok, let's do something");
 			update_balance(amount, msg_source, msg_receiver);
 			//start timer
 			if (getIndex() == 0){
-				printf("\nStart Timer\n");
+				printf("\nStart Timer");
 				TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, msg_pid);
 				scheduleAt(simTime()+1.0, self_msg);
-				
 
-				
 	        }
 
 		}
@@ -203,9 +198,45 @@ void DB::handleMessage(cMessage *msg){
 	}
 
 	if (msg_type == 2){
-		//DO 
+		bool is_balance_equal = false;
+		//printf("\n%d receives a check message!", getIndex());
+		long balance_sender = ttmsg->getAmount();
+		long balance_receiver = ttmsg->getAmount2();
+		char check_sender = ttmsg->getSource();
+		char check_receiver = ttmsg->getReceiver();
+		printf("\nCheck balance: %ld and %ld", balance_sender, balance_receiver);
+		printf("\nMy balance is %ld and %ld", balance_amount(check_sender), balance_amount(check_receiver));
+
+		if (balance_sender == balance_amount(check_sender)){
+			if(balance_receiver == balance_amount(check_receiver)){
+				is_balance_equal = true;
+				printf("it's ok, balances are equals\n");
+			}
+			else{
+				printf("Balance receiver is different\n");
+			}
+		}
+		else{
+			printf("Balance sender is different\n");
+		}
+
+
+		if (is_balance_equal){
+			//send ok msg
+		}
+		else{
+			//send not ok msg
+		}
 	}
 }
+
+long DB::balance_amount(char person){
+	MYSQL *con = handleConnection(getIndex());
+	char *part_one = (char*)"SELECT balance FROM people WHERE name=\"";
+	char *balance_check= create_query(part_one, person);
+	return read_balance(balance_check, con);
+}
+
 
 void DB::update_balance(int transaction_amount, char source, char destination){
 	MYSQL *con = handleConnection(getIndex());
@@ -316,7 +347,7 @@ int DB::read_balance(char* my_query, MYSQL *connection){
 
   		mysql_free_result(query);
   		mysql_close(connection);
-  		fprintf(stderr, "Closing connection\n\n");
+  		fprintf(stderr, "Connection closed!\n");
 
   		//fprintf(stderr, "%d\n", query_balance);
   		return query_balance;
@@ -343,11 +374,13 @@ TicTocMsg13 *DB::generateMessage(int self, int my_type, char src, char rec, int 
 }
 
 
-TicTocMsg13 *DB::generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid){
+TicTocMsg13 *DB::generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid, char source, char receiver){
 	TicTocMsg13 *msg = new TicTocMsg13("msg_check");
 	msg->setMsg_type(2);
 	msg->setDb_source(src);
 	msg->setDestination(dest);
+	msg->setSource(source);
+	msg->setReceiver(receiver);
 	msg->setAmount(sndr_amnt);
 	msg->setAmount2(rec_amnt);	
 	msg->setPid(operation_pid);
