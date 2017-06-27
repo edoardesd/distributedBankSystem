@@ -42,9 +42,11 @@ class DB : public cSimpleModule
 	virtual ErrorMessage *generateErrMessage(int src, char dest, int err_pid);
 	virtual TicTocMsg13 *generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid, char source, char receiver);
 	virtual TicTocMsg13 *generateMessage(int self, int my_type, char src, char rec, int pid);
+	virtual TicTocMsg13 *generateMessage(bool flag, int pid);
 
 	virtual MYSQL *createConnection(char *db_name);
 	virtual MYSQL *handleConnection(int my_db);
+	virtual void insert_transaction(int pid, char sender, char receiver, int sender_bal, int receiver_bal);
 	virtual int read_balance(char* my_query, MYSQL *connection);
 	virtual long balance_amount(char person);
 	virtual bool check_balance(int my_amount, char source);
@@ -57,6 +59,7 @@ class DB : public cSimpleModule
 	unsigned int port = 3306;
 	unsigned int flag = 0;
 	int num_fields;
+	bool final_flag = true;
 	cMessage *event;
 
 	//MYSQL *conn;
@@ -165,6 +168,9 @@ void DB::handleMessage(cMessage *msg){
 			printf("\nSend check msg to %d", k);
 			bubble("Send check message");
 		}
+
+		TicTocMsg13 *self_msg= generateMessage(getIndex(), 4, msg_source, msg_receiver, msg_pid);
+		scheduleAt(simTime()+5.0, self_msg);
 	}
 
 	if (msg_type == 1){
@@ -180,8 +186,10 @@ void DB::handleMessage(cMessage *msg){
 		if(check_balance(amount, msg_source)){
 			printf("\nBalance ok, let's do something");
 			update_balance(amount, msg_source, msg_receiver);
+			
 			//start timer
 			if (getIndex() == 0){
+				insert_transaction(msg_pid, msg_source, msg_receiver, 20,20);
 				printf("\nStart Timer");
 				TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, msg_pid);
 				scheduleAt(simTime()+1.0, self_msg);
@@ -204,6 +212,7 @@ void DB::handleMessage(cMessage *msg){
 		long balance_receiver = ttmsg->getAmount2();
 		char check_sender = ttmsg->getSource();
 		char check_receiver = ttmsg->getReceiver();
+		int msg_pid = ttmsg->getPid();
 		printf("\nCheck balance: %ld and %ld", balance_sender, balance_receiver);
 		printf("\nMy balance is %ld and %ld", balance_amount(check_sender), balance_amount(check_receiver));
 
@@ -213,19 +222,34 @@ void DB::handleMessage(cMessage *msg){
 				printf("it's ok, balances are equals\n");
 			}
 			else{
-				printf("Balance receiver is different\n");
+				printf("receiver balance is different\n");
 			}
 		}
 		else{
-			printf("Balance sender is different\n");
+			printf("sender balance is different\n");
 		}
 
 
-		if (is_balance_equal){
-			//send ok msg
+		//send message to 0
+		TicTocMsg13 *flag_msg= generateMessage(is_balance_equal, msg_pid);
+		send(flag_msg, "gate$o", 0);
+	}
+
+	if (msg_type == 3){
+		bool actual_flag = ttmsg->getFlag();
+		if (!actual_flag){
+			final_flag = false;
+		}
+	}
+
+	if(msg_type == 4){
+		if (final_flag){
+			printf("All the balance are ok\n");
+			//send ok message to B
 		}
 		else{
-			//send not ok msg
+			printf("At least one balance is not ok\n");
+			// delete operation with pid from all the db
 		}
 	}
 }
@@ -253,6 +277,17 @@ void DB::update_balance(int transaction_amount, char source, char destination){
       finish_with_error(con);
   	}
   	else if (mysql_query(con, increase_query)){    
+      finish_with_error(con);
+  	}
+}
+
+void DB::insert_transaction(int pid, char sender, char receiver, int sender_bal, int receiver_bal){
+	MYSQL *con = handleConnection(getIndex());
+
+	//query: INSERT INTO transaction(pid, sender, receiver, s_bal, r_bal) VALUES (999, 'A', 'B', 200, 300);
+	char *insert_query = "INSERT INTO transaction(pid, sender, receiver, s_bal, r_bal) VALUES (998, 'A', 'B', 200, 300)";
+	
+	if (mysql_query(con, insert_query)){    
       finish_with_error(con);
   	}
 }
@@ -363,8 +398,20 @@ ErrorMessage *DB::generateErrMessage(int src, char dest, int err_pid){
 	return msg;
 }
 
+TicTocMsg13 *DB::generateMessage(bool flag, int pid){
+	TicTocMsg13 *msg = new TicTocMsg13("flag_msg");
+	msg->setMsg_type(3);
+	msg->setDb_source(getIndex());
+	msg->setDestination(0);
+	msg->setFlag(flag);
+	msg->setPid(pid);
+
+	return msg;
+
+}
+
 TicTocMsg13 *DB::generateMessage(int self, int my_type, char src, char rec, int pid){
-	TicTocMsg13 *msg = new TicTocMsg13("msg_self");
+	TicTocMsg13 *msg = new TicTocMsg13("self_msg");
 	msg->setMsg_type(my_type);
 	msg->setDb_source(self);
 	msg->setSource(src);
@@ -372,6 +419,7 @@ TicTocMsg13 *DB::generateMessage(int self, int my_type, char src, char rec, int 
 	msg->setPid(pid);
 	return msg;
 }
+
 
 
 TicTocMsg13 *DB::generateMessage(int src, int dest, long sndr_amnt, long rec_amnt, int operation_pid, char source, char receiver){
