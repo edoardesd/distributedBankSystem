@@ -20,6 +20,8 @@
 #include <unistd.h>
 #include <omnetpp.h>
 #include <mysql/mysql.h>
+#include <iostream>
+#include <fstream>
 #include "tictoc13_m.h"
 
 
@@ -27,9 +29,6 @@ using namespace omnetpp;
 static char *unix_socket = NULL;
 
 
-
-
-int global_pid = 0;
 
 ////////////////////// DATABASE METHODS //////////////////////
 
@@ -50,6 +49,7 @@ class DB : public cSimpleModule
 	virtual int read_balance(char* my_query, MYSQL *connection);
 	virtual long balance_amount(char person);
 	virtual bool check_balance(int my_amount, char source);
+	virtual char * create_insert(int pid, char sender, char receiver , int sender_bal, int receiver_bal);
 	virtual char *create_query(char *first_part, char name_part);
 	virtual char *create_update(char *first_part, char *second_part, int amount, char name_part);
 	virtual void update_balance(int transaction_amount, char source, char destination);
@@ -71,6 +71,8 @@ class DB : public cSimpleModule
 
 Define_Module(DB);
 
+
+
 MYSQL *DB::createConnection(char *db_name){
 
 	MYSQL * con = mysql_init(NULL);
@@ -85,7 +87,7 @@ MYSQL *DB::createConnection(char *db_name){
 			finish_with_error(con);
 		}
 		else{
-			printf("\nConnection with the database established" );
+			//printf("\nConnection with the database established" );
 
 			return con;
 		}
@@ -178,8 +180,8 @@ void DB::handleMessage(cMessage *msg){
 		msg_source = ttmsg->getSource();
 		msg_receiver = ttmsg->getReceiver(); //e.g. B
 		int msg_pid = ttmsg->getPid();
-		printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
-			msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
+		//printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
+		//	msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
 
 		delete ttmsg;
 
@@ -279,17 +281,66 @@ void DB::update_balance(int transaction_amount, char source, char destination){
   	else if (mysql_query(con, increase_query)){    
       finish_with_error(con);
   	}
+
+  	mysql_close(con);
+  	//fprintf(stderr, "Connection closed!\n");
 }
 
 void DB::insert_transaction(int pid, char sender, char receiver, int sender_bal, int receiver_bal){
 	MYSQL *con = handleConnection(getIndex());
 
 	//query: INSERT INTO transaction(pid, sender, receiver, s_bal, r_bal) VALUES (999, 'A', 'B', 200, 300);
-	char *insert_query = "INSERT INTO transaction(pid, sender, receiver, s_bal, r_bal) VALUES (998, 'A', 'B', 200, 300)";
-	
+	char *insert_query = create_insert(pid, sender, receiver, sender_bal, receiver_bal);
+
 	if (mysql_query(con, insert_query)){    
       finish_with_error(con);
   	}
+
+  	
+  	mysql_close(con);
+  	//fprintf(stderr, "Connection closed!\n");
+
+  	printf("\nTransaction inserted!\n");
+}
+
+
+char * DB::create_insert(int pid, char sender, char receiver , int sender_bal, int receiver_bal){
+	char *close_query = (char*)"\')";
+	char char_pid[10];
+	char char_send_bal[10];
+	char char_rec_bal[10];
+	char *quot = (char*)"\'";
+	char *comma = (char*)"\', \'";
+
+	sprintf(char_pid,"%d",pid); //convert int to a string
+	sprintf(char_send_bal,"%d",sender_bal); //convert int to a string
+	sprintf(char_rec_bal,"%d",receiver_bal); //convert int to a string
+
+	size_t len;
+
+	char *insert_part = (char*)"INSERT INTO transaction(pid, sender, receiver, s_bal, r_bal) VALUES (";
+	char *full_insert = (char *) malloc(1+strlen(insert_part) + strlen(quot) + strlen(char_pid) + strlen(comma)+ 1 + strlen(comma) + 1 + strlen(comma) + strlen(char_send_bal) + strlen(comma) + strlen(char_rec_bal) + strlen(close_query));
+
+
+	strcpy(full_insert, insert_part);
+	strcat(full_insert, quot);
+	strcat(full_insert, char_pid);
+	strcat(full_insert, comma);
+	len = strlen(full_insert);
+	full_insert[len] = sender;
+	full_insert[len + 1] = '\0';
+	strcat(full_insert, comma);
+	len = strlen(full_insert);
+	full_insert[len] = receiver;
+	full_insert[len + 1] = '\0';
+	strcat(full_insert, comma);
+	strcat(full_insert, char_send_bal);
+	strcat(full_insert, comma);
+	strcat(full_insert, char_rec_bal);
+	strcat(full_insert, close_query);
+
+	
+	return full_insert;
 }
 
 char * DB::create_update(char *first_part, char *second_part, int amount, char name_part){
@@ -327,6 +378,7 @@ bool DB::check_balance(int my_amount, char source){
 	char *balance_query = create_query(query_part, source);
 
 	int balance = read_balance(balance_query, con);
+
 
 	if (balance - my_amount > 0){
 		return true;
@@ -382,7 +434,7 @@ int DB::read_balance(char* my_query, MYSQL *connection){
 
   		mysql_free_result(query);
   		mysql_close(connection);
-  		fprintf(stderr, "Connection closed!\n");
+  		//fprintf(stderr, "Connection closed!\n");
 
   		//fprintf(stderr, "%d\n", query_balance);
   		return query_balance;
@@ -453,35 +505,50 @@ class Person : public cSimpleModule
 	virtual void forwardMessage(TicTocMsg13 *msg);
 	virtual void initialize() override;
 	virtual void handleMessage(cMessage *msg);
-	virtual TicTocMsg13 *generateMessage(char src, int dest, long my_amount, char my_rec);
+	virtual TicTocMsg13 *generateMessage(char src, int dest, long my_amount, char my_rec, int pid);
+	virtual int read_pid();
+	virtual void update_pid(int new_pid);
 
+  private:
+	cMessage *start;  // pointer to the event object which we'll use for timing
+    cMessage *tictocMsg;  // variable to remember the message until we send it back
 };
 
 Define_Module(Person);
 
+int Person::read_pid(){
 
+	int i;
+	FILE *file;
+	file = fopen("pid.txt", "r");
+	fscanf (file, "%d", &i);    
+  	while (!feof (file)){  
+    	fscanf (file, "%d", &i);      
+    }
+
+	return i;
+
+}
+
+void Person::update_pid(int new_pid){
+	FILE *file = fopen("pid.txt", "w");
+	if (file == NULL){
+    printf("Error opening file!\n");
+    exit(1);
+	}
+
+	fprintf(file, "%d", new_pid);
+
+}
 
 void Person::initialize()
 {
-	
-	if (par("sendMsgOnInit").boolValue() == true) {
-		// Boot the process scheduling the initial message as a self-message.
-		
-		int n = gateSize("gate");
-		long amount = 10;
-		char receiver = 'B';
+	printf("Initialize nodes...\n");
+	printf("Program starts\n");
 
-		//Broadcast message = 99
-		TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver);
-		for (int k = 0; k<n; k = k+1){
-			// $o and $i suffix is used to identify the input/output part of a two way gate
-			
-			TicTocMsg13 *copy = msg->dup();
-			send(copy, "gate$o", k);
-			
-			bubble("Send message");
-		}
-	}
+	start = new cMessage("start_msg");
+	scheduleAt(0.0, start);
+
 }
 
 void Person::forwardMessage(TicTocMsg13 *msg)
@@ -506,15 +573,42 @@ void Person::forwardMessage(TicTocMsg13 *msg)
 
 void Person::handleMessage(cMessage *msg)
 {
-	ErrorMessage *ttmsg = check_and_cast<ErrorMessage *>(msg);
 
-	printf("Msg from %d come back with destination %c\n", ttmsg->getSource(), ttmsg->getDestination());
-	printf("You can't performe operation with pid %d\n", ttmsg->getPid());
-	//forwardMessage(ttmsg);
+	 if (msg == start) {
+       int global_pid = read_pid();
+		if (par("sendMsgOnInit").boolValue() == true) {
+			// Boot the process scheduling the initial message as a self-message.
+		
+			int n = gateSize("gate");
+			long amount = 10;
+			char receiver = 'B';
+
+			//Broadcast message = 99
+			TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver, global_pid);
+
+			printf("Send the broadcast message to the databases\n");
+			for (int k = 0; k<n; k = k+1){
+			// $o and $i suffix is used to identify the input/output part of a two way gate
+			
+				TicTocMsg13 *copy = msg->dup();
+				send(copy, "gate$o", k);
+			
+				bubble("Send messages");
+			}
+		}
+    }
+	else{
+
+		ErrorMessage *ttmsg = check_and_cast<ErrorMessage *>(msg);
+
+		printf("Msg from %d come back with destination %c\n", ttmsg->getSource(), ttmsg->getDestination());
+		printf("You can't performe operation with pid %d\n", ttmsg->getPid());
+		//forwardMessage(ttmsg);
+	}
 
 }
 
-TicTocMsg13 *Person::generateMessage(char src, int dest, long my_balance, char my_rec)
+TicTocMsg13 *Person::generateMessage(char src, int dest, long my_balance, char my_rec, int my_pid)
 {
 	TicTocMsg13 *msg = new TicTocMsg13("msg_gen");
 	msg->setMsg_type(1);
@@ -522,8 +616,10 @@ TicTocMsg13 *Person::generateMessage(char src, int dest, long my_balance, char m
 	msg->setDestination(dest);
 	msg->setAmount(my_balance);
 	msg->setReceiver(my_rec);
-	global_pid++;
-	msg->setPid(global_pid);
+	my_pid++;
+	msg->setPid(my_pid);
+
+	update_pid(my_pid);
 	return msg;
 }
 
