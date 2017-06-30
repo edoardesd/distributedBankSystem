@@ -10,6 +10,7 @@
 simple Person {
     parameters:
         @display("i=block/routing");
+        int name = default(0);
     
     gates:
     	inout gate[];
@@ -20,6 +21,8 @@ simple A extends Person{
         @display("i=,red");
         @display("p=50, 50");
         bool sendMsgOnInit = default(true);
+        name = 65;
+        
 }
 
 simple B extends Person{
@@ -27,6 +30,7 @@ simple B extends Person{
     	@display("i=,gold");
         @display("p=400, 50");
         bool sendMsgOnInit = default(false);
+        name = 66;
 }
 
 
