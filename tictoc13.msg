@@ -20,8 +20,8 @@ message TicTocMsg13{
     char receiver;
     
     int pid;
-    long amount;
-   	long amount2; //used when check balance -> //amount of second one
+    int amount;
+   	int amount2; //used when check balance -> //amount of second one
 
     bool flag; //true or false if the balance from db123 is different
     
@@ -43,3 +43,6 @@ message ErrorMessage{
     int pid;
 }
 
+//0: balance less than 0
+//1: operation ok
+//2: Well, this is embarrassing! Sorry something has gone wrong.
