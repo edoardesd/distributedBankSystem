@@ -21,7 +21,7 @@ simple A extends Person{
         @display("i=,red");
         @display("p=50, 50");
         bool sendMsgOnInit = default(true);
-        name = 65;
+        name = 65;  //A
         
 }
 
@@ -30,7 +30,7 @@ simple B extends Person{
     	@display("i=,gold");
         @display("p=400, 50");
         bool sendMsgOnInit = default(false);
-        name = 66;
+        name = 66; //B
 }
 
 
