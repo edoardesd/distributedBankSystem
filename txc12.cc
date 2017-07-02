@@ -32,7 +32,7 @@ using namespace omnetpp;
 static char *unix_socket = NULL;
 
 int transaction_counter = 0;
-int transaction_array[200][4]; 
+int transaction_array[200][5]; 
 
 
 
@@ -67,13 +67,15 @@ class DB : public cSimpleModule
 	virtual int read_balance_char(char* my_query, MYSQL *connection); //aggiustabile
 
 
-	virtual bool arevaluesequal(int val, int arr[][4],int size);
-	virtual bool isvalueinarray(int val, int arr[][4], int size);
-	virtual int whereisvalue(int val, int arr[200][4], int size);
+	virtual bool arevaluesequal(int val, int arr[][5],int size);
+	virtual bool isvalueinarray(int val, int arr[][5], int size);
+	virtual int whereisvalue(int val, int arr[200][5], int size);
+	virtual int howmanytransactions(int my_pid, int arr[200][5], int size);
 
 	virtual void rollback(int pid);
 	virtual char read_sender(int pid);
 	virtual char read_receiver(int pid);
+	virtual void delete_transaction(int pid);
 
 
 
@@ -185,6 +187,7 @@ void DB::handleMessage(cMessage *msg){
 		pid = ttmsg->getPid();
 		int pid_index = whereisvalue(pid, transaction_array, 200);
 		bool transaction_equal;
+		int number_of_transactions;
 		
 		msg_source = 'A';
 		printf("\nEnd Timer!\n");
@@ -192,7 +195,9 @@ void DB::handleMessage(cMessage *msg){
 		printf("\nCheck dbs transaction money");
 	
 
-		transaction_equal = arevaluesequal(pid_index, transaction_array, 4);
+		transaction_equal = arevaluesequal(pid_index, transaction_array, 5);
+		number_of_transactions = howmanytransactions(pid_index, transaction_array, 4); //perchè il primo non si deve contare
+		printf("\nThere are %d transactions.", number_of_transactions);
 		printf("\nAll transactions have the same money? ");
 		printf("%s", transaction_equal ? "true" : "false");
 
@@ -215,7 +220,9 @@ void DB::handleMessage(cMessage *msg){
 				send(copy, "gate$o", k);
 				bubble("Send rollback msg");
 			}
-			
+			TicTocMsg13 *copy = rollback_msg->dup();
+			scheduleAt(simTime(), copy);
+
 			
 			ErrorMessage *confirm_msg = generateErrMessage(getIndex(), msg_source, pid, 2);
 			send(confirm_msg, "gate$o", getIndex());			//send msg to A
@@ -224,9 +231,9 @@ void DB::handleMessage(cMessage *msg){
 
 	if (msg_type == 1){
 		amount = ttmsg->getAmount();
-		if (getIndex()==2){
-			amount = 7;
-		}
+		//if (getIndex()==2){
+		//	amount = 1;
+		//}
 		msg_source = ttmsg->getSource();
 		msg_receiver = ttmsg->getReceiver(); //e.g. B
 		pid = ttmsg->getPid();
@@ -243,8 +250,13 @@ void DB::handleMessage(cMessage *msg){
 			
 			if (getIndex() == 0){
 				//start timer
+				transaction_array[transaction_counter][0] = pid;
+				transaction_array[transaction_counter][getIndex()+1] = amount;
+				transaction_counter++;
+
 				printf("\nDB n.%d starts a timer...", getIndex());
 				TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, pid, amount);
+
 				scheduleAt(simTime()+5.0, self_msg);
 
 			}
@@ -267,12 +279,11 @@ void DB::handleMessage(cMessage *msg){
 	}
 
 	if (msg_type == 2){
-		bool is_balance_equal = false;
 
 		int money_transfer = ttmsg->getAmount();
 		char check_sender = ttmsg->getSource();
 		char check_receiver = ttmsg->getReceiver();
-		char source = ttmsg->getDb_source();
+		int source = ttmsg->getDb_source();
 		pid = ttmsg->getPid();
 
 		//printf("\nCheck if the operation with PID %d is %d euro", pid, money_transfer);
@@ -285,37 +296,28 @@ void DB::handleMessage(cMessage *msg){
 
 		if(isvalueinarray(pid, transaction_array, 200)){
 			index = whereisvalue(pid, transaction_array, 200);
-			transaction_array[index][source] = money_transfer;
+			transaction_array[index][source+1] = money_transfer;
 
 		}
 		else{
+
+			//db0 doesn't receive the first message from A
+			printf("\nDB.%d non ha ricevuto il primo messaggio. rimando un self_msg", getIndex());
+			TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, check_sender, check_receiver, pid, money_transfer);
+			scheduleAt(simTime()+5.0, self_msg);
+
 			transaction_array[transaction_counter][0] = pid;
-			transaction_array[transaction_counter][source] = money_transfer;
+			transaction_array[transaction_counter][source+1] = money_transfer;
 
 			printf("\nInserisco %d nell'array", transaction_array[transaction_counter][0]);
 			transaction_counter++;
+
+
 		}
 
-		printf("\nPid number: %d --- money:  %d ", transaction_array[index][0], transaction_array[index][source]);
+		printf("\nPid number: %d --- money:  %d ", transaction_array[index][0], transaction_array[index][source+1]);
 	}
 
-	if (msg_type == 3){
-		bool actual_flag = ttmsg->getFlag();
-		if (!actual_flag){
-			final_flag = false;
-		}
-	}
-
-	if(msg_type == 4){
-		if (final_flag){
-			printf("All the balance are ok\n");
-			//send ok message to B
-		}
-		else{
-			printf("At least one balance is not ok\n");
-			// delete operation with pid from all the db
-		}
-	}
 
 	if(msg_type == 5){
 		pid = ttmsg->getPid();
@@ -329,10 +331,28 @@ void DB::rollback(int pid){
 	int amount = transaction_amount(pid);
 	char sender = read_sender(pid);
 	char receiver = read_receiver(pid);	
+	printf("pid %d, sender %c, receiver %c\n",pid, sender, receiver );
 
-	//delete_transaction(pid);
-	//update_sender(...);
-	//update_receiver(...);
+	delete_transaction(pid);
+	update_balance(amount, receiver, sender);
+	printf("\nRollback performed correctly!");
+}
+
+
+void DB::delete_transaction(int pid){
+	MYSQL *con = handleConnection(getIndex());
+
+	//DELETE FROM table_name WHERE condition;
+	char *delete_part = (char*)"DELETE FROM transaction WHERE pid=\'";
+	char *delete_query= create_query_transaction(delete_part, pid);
+
+	if (mysql_query(con, delete_query)){    
+	  finish_with_error(con);
+	}
+
+	mysql_close(con);
+	printf("\nTransaction number %d deleted", pid);
+
 }
 
 char DB::read_sender(int pid){
@@ -631,7 +651,7 @@ TicTocMsg13 *DB::generateMessage(int src, int dest, int sndr_amnt, int rec_amnt,
 
 }
 
-bool DB::isvalueinarray(int val, int arr[][4], int size){
+bool DB::isvalueinarray(int val, int arr[][5], int size){
 	int i;
 	for (i=0; i < size; i++) {
 		if (arr[i][0] == val)
@@ -640,7 +660,7 @@ bool DB::isvalueinarray(int val, int arr[][4], int size){
 	return false;
 }
 
-int DB::whereisvalue(int val, int arr[][4], int size){
+int DB::whereisvalue(int val, int arr[][5], int size){
 	int i;
 	for (i=0; i < size; i++) {
 		if (arr[i][0] == val)
@@ -649,16 +669,28 @@ int DB::whereisvalue(int val, int arr[][4], int size){
 	return 777;
 }
 
-bool DB::arevaluesequal(int my_pid, int arr[200][4], int size){
+bool DB::arevaluesequal(int my_pid, int arr[200][5], int size){
 	int i;
-	for(i=0; i<size-1; i++){
-		printf("\nPos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
+	for(i=1; i<size-1; i++){
+		//printf("\nEQ: Pos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
 		if (arr[my_pid][i] != arr[my_pid][i+1]){
 
 			return false;
 		}
 	}
 	return true;
+}
+
+int DB::howmanytransactions(int my_pid, int arr[200][5], int size){
+	int i;
+	int bound = size+1;
+	for(i=1; i<bound; i++){
+		printf("\nHOW: Pos i: %d size: %d", arr[my_pid][i], size);
+		if (arr[my_pid][i] == 0){
+			size--;
+		}
+	}
+	return size;
 }
 
 
@@ -753,8 +785,13 @@ void Person::handleMessage(cMessage *msg){
 		if (par("sendMsgOnInit").boolValue() == true) {
 		
 			gate_size = gateSize("gate");
+			int amount;
 
-			int amount = rand() % 20;
+			do{
+				amount = rand() % 20;
+			}while(amount==0);
+
+
 			char receiver = 'B';
 
 			global_pid++;
@@ -763,13 +800,17 @@ void Person::handleMessage(cMessage *msg){
 			TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver, global_pid);
 
 			printf("Send the broadcast message to the databases\n");
-			for (int k = 0; k<gate_size; k = k+1){
+			for (int k = 1; k<gate_size; k++){
 			// $o and $i suffix is used to identify the input/output part of a two way gate
 				TicTocMsg13 *copy = msg->dup();
 				send(copy, "gate$o", k);
 			
 				bubble("Send messages");
 			}
+
+			printf("\nSend a new message");
+			start = new cMessage("start_msg");
+			scheduleAt(simTime()+20, start);
 		}
 	}
 	else{
