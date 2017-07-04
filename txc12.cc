@@ -33,6 +33,7 @@ static char *unix_socket = NULL;
 
 int transaction_counter = 0;
 int transaction_array[200][5]; 
+int global_pid = 0;
 
 
 
@@ -185,8 +186,10 @@ void DB::handleMessage(cMessage *msg){
 
 	if (msg_type == 0) {
 		pid = ttmsg->getPid();
+		amount = ttmsg->getAmount();
+		msg_receiver = ttmsg->getDestination();
 		int pid_index = whereisvalue(pid, transaction_array, 200);
-		bool transaction_equal;
+		bool transaction_equal = false;
 		int number_of_transactions;
 		
 		msg_source = 'A';
@@ -230,52 +233,69 @@ void DB::handleMessage(cMessage *msg){
 	}
 
 	if (msg_type == 1){
-		amount = ttmsg->getAmount();
-		//if (getIndex()==2){
-		//	amount = 1;
-		//}
-		msg_source = ttmsg->getSource();
-		msg_receiver = ttmsg->getReceiver(); //e.g. B
 		pid = ttmsg->getPid();
-		//printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
-		//	msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
-
-		delete ttmsg; //
-
-		if(check_balance(amount, msg_source)){
-			printf("\nBalance is greater than zero.");
-			update_balance(amount, msg_source, msg_receiver);
-			
-			insert_transaction(pid, msg_source, msg_receiver, amount);
-			
-			if (getIndex() == 0){
-				//start timer
-				transaction_array[transaction_counter][0] = pid;
-				transaction_array[transaction_counter][getIndex()+1] = amount;
-				transaction_counter++;
-
-				printf("\nDB n.%d starts a timer...", getIndex());
-				TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, pid, amount);
-
-				scheduleAt(simTime()+5.0, self_msg);
-
+		if (uniform(0, 1) < 0.1) {
+        	EV << "\"Losing\" message\n";
+        	printf("\nDB n.%d \"Lose\" message of type %d with pid %d \n", getIndex(), msg_type, pid);
+        	bubble("message lost");  // making animation more informative...
+        	delete ttmsg;
+    	}
+   		else {
+		amount = ttmsg->getAmount();
+				//if (getIndex()==2){
+				//	amount = 1;
+				//}
+				msg_source = ttmsg->getSource();
+				msg_receiver = ttmsg->getReceiver(); //e.g. B
+				
+				//printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
+				//	msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
+		
+				delete ttmsg; //
+		
+				if(check_balance(amount, msg_source)){
+					printf("\nBalance is greater than zero.");
+					update_balance(amount, msg_source, msg_receiver);
+					
+					int index;
+					insert_transaction(pid, msg_source, msg_receiver, amount);
+					
+					if (getIndex() == 0){
+						//start timer
+						if(isvalueinarray(pid, transaction_array, 200)){
+							index = whereisvalue(pid, transaction_array, 200);
+							transaction_array[index][getIndex()+1] = amount;
+		
+						}
+						else{
+							transaction_array[transaction_counter][0] = pid;
+							transaction_array[transaction_counter][getIndex()+1] = amount;
+							transaction_counter++;
+		
+							printf("\nDB n.%d starts a timer...", getIndex());
+							TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, pid, amount);
+		
+							scheduleAt(simTime()+5.0, self_msg);
+						}
+		
+					}
+					else{
+						//other DBs send a message to the coordinator
+						TicTocMsg13 *transaction_msg = generateMessage(getIndex(), 2 ,msg_source, msg_receiver, pid, amount);
+						send(transaction_msg, "gate$o", DB_COORDINATOR);
+						printf("\nDB n.%d sends a message to DB n.%d (coordinator)", getIndex(), DB_COORDINATOR);
+						bubble("Send MSG");
+		
+					}
+		
+				}
+				else{
+					printf("Your balance is equal or less than 0, ERROR!\n");
+					ErrorMessage *msg = generateErrMessage(getIndex(), msg_source, pid, 0);
+					send(msg, "gate$o", getIndex()); //send a message to A
+					bubble("Send Error");
+				}
 			}
-			else{
-				//other DBs send a message to the coordinator
-				TicTocMsg13 *transaction_msg = generateMessage(getIndex(), 2 ,msg_source, msg_receiver, pid, amount);
-				send(transaction_msg, "gate$o", DB_COORDINATOR);
-				printf("\nDB n.%d sends a message to DB n.%d (coordinator)", getIndex(), DB_COORDINATOR);
-				bubble("Send MSG");
-
-			}
-
-		}
-		else{
-			printf("Your balance is equal or less than 0, ERROR!\n");
-			ErrorMessage *msg = generateErrMessage(getIndex(), msg_source, pid, 0);
-			send(msg, "gate$o", getIndex()); //send a message to A
-			bubble("Send Error");
-		}
 	}
 
 	if (msg_type == 2){
@@ -288,7 +308,7 @@ void DB::handleMessage(cMessage *msg){
 
 		//printf("\nCheck if the operation with PID %d is %d euro", pid, money_transfer);
 
-		int query_transaction = transaction_amount(pid);
+		//int query_transaction = transaction_amount(pid);
 		
 
 		printf("\nSource: %d", source );
@@ -311,6 +331,7 @@ void DB::handleMessage(cMessage *msg){
 
 			printf("\nInserisco %d nell'array", transaction_array[transaction_counter][0]);
 			transaction_counter++;
+			index = whereisvalue(pid, transaction_array, 200);
 
 
 		}
@@ -509,7 +530,6 @@ char * DB::create_query_transaction(char *first_part, int pid){
 	char *close_query = (char*)"\'";
 	char char_pid[10];
 	sprintf(char_pid,"%d",pid); //convert int to a string
-	size_t len = strlen(first_part);
 
 	char * query_with_pid = (char *) malloc(1 + strlen(first_part) +strlen(char_pid)+ strlen(close_query));
 	strcpy(query_with_pid, first_part);
@@ -671,8 +691,10 @@ int DB::whereisvalue(int val, int arr[][5], int size){
 
 bool DB::arevaluesequal(int my_pid, int arr[200][5], int size){
 	int i;
+
+	printf("\nPid array: %d ---- pid numero: %d", arr[my_pid][0], my_pid);
 	for(i=1; i<size-1; i++){
-		//printf("\nEQ: Pos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
+		printf("\nEQ: Pos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
 		if (arr[my_pid][i] != arr[my_pid][i+1]){
 
 			return false;
@@ -733,6 +755,7 @@ int Person::read_pid(){
 	while (!feof (file)){  
 		fscanf (file, "%d", &i);      
 	}
+	fclose(file);
 
 	return i;
 
@@ -746,6 +769,8 @@ void Person::update_pid(int pid){
 	}
 
 	fprintf(file, "%d", pid);
+	fclose(file);
+	printf("\nNew pid: %d", pid);
 
 }
 
@@ -781,9 +806,12 @@ void Person::forwardMessage(TicTocMsg13 *msg){
 void Person::handleMessage(cMessage *msg){
 
 	if (msg == start) {
-		int global_pid = read_pid();
+		
 		if (par("sendMsgOnInit").boolValue() == true) {
 		
+			global_pid = read_pid();
+			global_pid++;
+			update_pid(global_pid);
 			gate_size = gateSize("gate");
 			int amount;
 
@@ -794,13 +822,12 @@ void Person::handleMessage(cMessage *msg){
 
 			char receiver = 'B';
 
-			global_pid++;
-			update_pid(global_pid);
+			
 			//Broadcast message = 99
 			TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver, global_pid);
 
 			printf("Send the broadcast message to the databases\n");
-			for (int k = 1; k<gate_size; k++){
+			for (int k = 0; k<gate_size; k++){
 			// $o and $i suffix is used to identify the input/output part of a two way gate
 				TicTocMsg13 *copy = msg->dup();
 				send(copy, "gate$o", k);
@@ -810,7 +837,7 @@ void Person::handleMessage(cMessage *msg){
 
 			printf("\nSend a new message");
 			start = new cMessage("start_msg");
-			scheduleAt(simTime()+20, start);
+			scheduleAt(simTime()+(rand() % 30), start);
 		}
 	}
 	else{
