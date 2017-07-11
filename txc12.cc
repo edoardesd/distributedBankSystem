@@ -1,14 +1,9 @@
 //
-// This file is part of an OMNeT++/OMNEST simulation example.
-//
 //how to compile:
 //opp_makemake -f -o output -I/mysql/include -L/mysql/lib/o -lmysqlclient
 //
 //how to run rapidly:
 //make && ./output
-//
-// Copyright (C) 2003 Ahmet Sekercioglu
-// Copyright (C) 2003-2015 Andras Varga
 //
 // This file is distributed WITHOUT ANY WARRANTY. See the file
 // `license' for details on this and other legal matters.
@@ -24,16 +19,35 @@
 #include <fstream>
 #include <stdbool.h>
 #include <time.h>
-#include "tictoc13_m.h"
+#include "dbmessage_m.h"
 
 #define DB_COORDINATOR 0
+#define BROADCAST 255
+
+//msg to db
+#define SELF_MSG_TRANSACTION 0
+#define TRANSACTION_MSG 1
+#define CHECK_MSG 2
+#define ROLLBACK_MSG 5
+#define ACK_MSG 6
+#define SELF_ACK_MSG 7
+
+//msg to user
+#define ERROR 0
+#define OPERATION_DONE 1
+#define SOMETHING_WRONG 2
+#define MONEY 9
+
 
 using namespace omnetpp;
 static char *unix_socket = NULL;
 
 int transaction_counter = 0;
 int transaction_array[200][5]; 
+int ack_array[200][5];
+int ack_counter;
 int global_pid = 0;
+int ack_number = 0;
 
 
 
@@ -44,13 +58,11 @@ int global_pid = 0;
 class DB : public cSimpleModule
 {
   protected:
-	virtual void forwardMessage(TicTocMsg13 *msg);
 	virtual void initialize() override;
 	virtual void handleMessage(cMessage *msg);
-	virtual ErrorMessage *generateErrMessage(int src, char dest, int err_pid, int msg_type);
-	virtual TicTocMsg13 *generateMessage(int src, int dest, int sndr_amnt, int rec_amnt, int operation_pid, char source, char receiver);
-	virtual TicTocMsg13 *generateMessage(int sender, int my_type, char src, char rec, int pid, int amount);
-	virtual TicTocMsg13 *generateMessage(bool flag, int pid);
+	virtual UserMessage *generateUserMessage(int src, char dest, int err_pid, int msg_type);
+	virtual DBMessage *generateMessage(int sender, int my_type, char src, char rec, int pid, int amount);
+
 
 	virtual MYSQL *createConnection(char *db_name);
 	virtual MYSQL *handleConnection(int my_db);
@@ -78,6 +90,8 @@ class DB : public cSimpleModule
 	virtual char read_receiver(int pid);
 	virtual void delete_transaction(int pid);
 
+	virtual bool loosemessage(cMessage *msg, int type, int pid);
+
 
 
   private:
@@ -85,7 +99,7 @@ class DB : public cSimpleModule
 	unsigned int flag = 0;
 	int num_fields;
 	int msg_type;
-	int gate_size;
+	int GATE_SIZE;
 	bool final_flag = true;
 	cMessage *event;
 
@@ -132,7 +146,8 @@ void DB::finish_with_error(MYSQL *con){
 void DB::initialize()
 {
 	EV << "HI, I'm number " << getIndex() << "\n";
-	gate_size = gateSize("gate");
+	GATE_SIZE = gateSize("gate");
+	printf("\nGATAE SIEZE: %d", GATE_SIZE);
 
 	//printf("HI, I'm number %d \n", getIndex());
 	
@@ -173,18 +188,20 @@ void DB::handleMessage(cMessage *msg){
 	char msg_receiver;
 	int pid;
 	int amount;
+	int db_source;
 	// Create the event object we'll use for timing -- just any ordinary message.
 	event = new cMessage("timeout");
 
-	TicTocMsg13 *ttmsg = check_and_cast<TicTocMsg13 *>(msg);
+	DBMessage *ttmsg = check_and_cast<DBMessage *>(msg);
 	msg_type = ttmsg->getMsg_type();
+	db_source = ttmsg->getDb_source();
 
 	
 	printf("\n\n----------------------------------------------------------");
-	printf("\nDB n.%d receives a message from (AGGIUSTARE)", getIndex());
+	printf("\nDB n.%d receives a message from %d", getIndex(), db_source);
 	printf(" of type %d", msg_type);
 
-	if (msg_type == 0) {
+	if (msg_type == SELF_MSG_TRANSACTION) {
 		pid = ttmsg->getPid();
 		amount = ttmsg->getAmount();
 		msg_receiver = ttmsg->getDestination();
@@ -195,164 +212,238 @@ void DB::handleMessage(cMessage *msg){
 		msg_source = 'A';
 		printf("\nEnd Timer!\n");
 
-		printf("\nCheck dbs transaction money");
+		printf("\nChecking dbs transaction money...");
 	
 
 		transaction_equal = arevaluesequal(pid_index, transaction_array, 5);
-		number_of_transactions = howmanytransactions(pid_index, transaction_array, 4); //perchè il primo non si deve contare
+		number_of_transactions = howmanytransactions(pid_index, transaction_array, GATE_SIZE); //perchè il primo non si deve contare
 		printf("\nThere are %d transactions.", number_of_transactions);
 		printf("\nAll transactions have the same money? ");
 		printf("%s", transaction_equal ? "true" : "false");
 
 		if (transaction_equal){
 			//send msg to A 
-			ErrorMessage *confirm_msg = generateErrMessage(getIndex(), msg_source, pid_index, 1);
+			
+			UserMessage *confirm_msg = generateUserMessage(getIndex(), msg_source, pid, OPERATION_DONE);
 			send(confirm_msg, "gate$o", getIndex());			//send msg to A
-
-			ErrorMessage *notification_msg = generateErrMessage(getIndex(), msg_source, pid_index, 9);
+			
+			msg_source = 'B';
+			UserMessage *notification_msg = generateUserMessage(getIndex(), msg_source, pid, MONEY);
 			send(notification_msg, "gate$o", 4);			//send msg to B
 
 		}
 		else{
-			TicTocMsg13 *rollback_msg= generateMessage(getIndex(), 5, msg_source, msg_receiver, pid, amount);
-			printf("\nSend the broadcast message to the databases");
+			DBMessage *rollback_msg= generateMessage(getIndex(), 5, msg_source, msg_receiver, pid, amount);
+			printf("\nSend the broadcast rollback message to all the databases");
 
-			for (int k = 1; k<gate_size-1; k++){
+			for (int k = 1; k<GATE_SIZE-1; k++){
 
-				TicTocMsg13 *copy = rollback_msg->dup();
+				DBMessage *copy = rollback_msg->dup();
 				send(copy, "gate$o", k);
 				bubble("Send rollback msg");
 			}
-			TicTocMsg13 *copy = rollback_msg->dup();
+			DBMessage *copy = rollback_msg->dup();
 			scheduleAt(simTime(), copy);
-
 			
-			ErrorMessage *confirm_msg = generateErrMessage(getIndex(), msg_source, pid, 2);
-			send(confirm_msg, "gate$o", getIndex());			//send msg to A
+			if(isvalueinarray(pid, ack_array, 200)){
+				pid_index = whereisvalue(pid, ack_array, 200);
+			}
+			else{
+				ack_counter++;
+				pid_index = ack_counter;
+			}
+			ack_array[pid_index][0] = pid;
+			ack_array[pid_index][1] = 1;
+
+			DBMessage *ack_timer_msg= generateMessage(getIndex(), SELF_ACK_MSG, msg_source, msg_receiver, pid, amount);
+			scheduleAt(simTime()+10.0, ack_timer_msg);
+
 		}
 	}
 
-	if (msg_type == 1){
+	if (msg_type == TRANSACTION_MSG){
 		pid = ttmsg->getPid();
-		if (uniform(0, 1) < 0.1) {
-        	EV << "\"Losing\" message\n";
-        	printf("\nDB n.%d \"Lose\" message of type %d with pid %d \n", getIndex(), msg_type, pid);
-        	bubble("message lost");  // making animation more informative...
-        	delete ttmsg;
-    	}
-   		else {
-		amount = ttmsg->getAmount();
-				//if (getIndex()==2){
-				//	amount = 1;
-				//}
-				msg_source = ttmsg->getSource();
-				msg_receiver = ttmsg->getReceiver(); //e.g. B
+		if(!loosemessage(ttmsg, msg_type, pid)){
+			amount = ttmsg->getAmount();
+			msg_source = ttmsg->getSource();
+			msg_receiver = ttmsg->getReceiver(); //e.g. B
+			
+			//printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
+			//	msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
+	
+			if(check_balance(amount, msg_source)){
+				printf("\nBalance is greater than zero.");
+				update_balance(amount, msg_source, msg_receiver);
 				
-				//printf("\nMsg_type: %d, Source %c, Destination: %d, Receiver: %c, PID: %d, Amount %ld\n", 
-				//	msg_type, msg_source, ttmsg->getDestination(), msg_receiver, msg_pid, amount);
-		
-				delete ttmsg; //
-		
-				if(check_balance(amount, msg_source)){
-					printf("\nBalance is greater than zero.");
-					update_balance(amount, msg_source, msg_receiver);
-					
-					int index;
-					insert_transaction(pid, msg_source, msg_receiver, amount);
-					
-					if (getIndex() == 0){
-						//start timer
-						if(isvalueinarray(pid, transaction_array, 200)){
-							index = whereisvalue(pid, transaction_array, 200);
-							transaction_array[index][getIndex()+1] = amount;
-		
-						}
-						else{
-							transaction_array[transaction_counter][0] = pid;
-							transaction_array[transaction_counter][getIndex()+1] = amount;
-							transaction_counter++;
-		
-							printf("\nDB n.%d starts a timer...", getIndex());
-							TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, msg_source, msg_receiver, pid, amount);
-		
-							scheduleAt(simTime()+5.0, self_msg);
-						}
-		
+				int index;
+				insert_transaction(pid, msg_source, msg_receiver, amount);
+				
+				if (getIndex() == DB_COORDINATOR){
+					//start timer
+					if(isvalueinarray(pid, transaction_array, 200)){
+						index = whereisvalue(pid, transaction_array, 200);
+						transaction_array[index][getIndex()+1] = amount;
+	
 					}
 					else{
-						//other DBs send a message to the coordinator
-						TicTocMsg13 *transaction_msg = generateMessage(getIndex(), 2 ,msg_source, msg_receiver, pid, amount);
-						send(transaction_msg, "gate$o", DB_COORDINATOR);
-						printf("\nDB n.%d sends a message to DB n.%d (coordinator)", getIndex(), DB_COORDINATOR);
-						bubble("Send MSG");
-		
+						transaction_array[transaction_counter][0] = pid;
+						transaction_array[transaction_counter][getIndex()+1] = amount;
+						transaction_counter++;
+	
+						printf("\nDB n.%d starts a timer...", getIndex());
+						DBMessage *self_msg= generateMessage(getIndex(), SELF_MSG_TRANSACTION, msg_source, msg_receiver, pid, amount);
+	
+						scheduleAt(simTime()+5.0, self_msg);
 					}
-		
 				}
 				else{
-					printf("Your balance is equal or less than 0, ERROR!\n");
-					ErrorMessage *msg = generateErrMessage(getIndex(), msg_source, pid, 0);
-					send(msg, "gate$o", getIndex()); //send a message to A
-					bubble("Send Error");
+					//other DBs send a message to the coordinator
+					DBMessage *transaction_msg = generateMessage(getIndex(), CHECK_MSG ,msg_source, msg_receiver, pid, amount);
+					send(transaction_msg, "gate$o", DB_COORDINATOR);
+					printf("\nDB n.%d sends a message to DB n.%d (coordinator)", getIndex(), DB_COORDINATOR);
+					bubble("Send MSG");
+	
 				}
 			}
+			else{
+				printf("Your balance is equal or less than 0, ERROR!\n");
+				UserMessage *msg = generateUserMessage(getIndex(), msg_source, pid, ERROR);
+				send(msg, "gate$o", getIndex()); //send a message to A
+				bubble("Send Error");
+			}
+		}
 	}
 
-	if (msg_type == 2){
+	if (msg_type == CHECK_MSG){
+		if(!loosemessage(ttmsg, msg_type, pid)){
 
-		int money_transfer = ttmsg->getAmount();
-		char check_sender = ttmsg->getSource();
-		char check_receiver = ttmsg->getReceiver();
-		int source = ttmsg->getDb_source();
+			int money_transfer = ttmsg->getAmount();
+			char check_sender = ttmsg->getSource();
+			char check_receiver = ttmsg->getReceiver();
+			int source = ttmsg->getDb_source();
+			pid = ttmsg->getPid();
+
+			int index = 0;
+
+			if(isvalueinarray(pid, transaction_array, 200)){
+				index = whereisvalue(pid, transaction_array, 200);
+				transaction_array[index][source+1] = money_transfer;
+
+			}	
+			else{
+				//db0 doesn't receive the first message from A
+				printf("\nDB.%d doesn't receive the first message from A. Start the timer now", getIndex());
+				DBMessage *self_msg= generateMessage(getIndex(), DB_COORDINATOR, check_sender, check_receiver, pid, money_transfer);
+				scheduleAt(simTime()+5.0, self_msg);
+
+				transaction_array[transaction_counter][0] = pid;
+				transaction_array[transaction_counter][source+1] = money_transfer;
+
+				printf("\nInserisco %d nell'array", transaction_array[transaction_counter][0]);
+				transaction_counter++;
+				index = whereisvalue(pid, transaction_array, 200);
+
+			}	
+
+			printf("\nPid number: %d --- money:  %d ", transaction_array[index][0], transaction_array[index][source+1]);
+		}
+	}
+
+
+	if(msg_type == ROLLBACK_MSG){
 		pid = ttmsg->getPid();
-
-		//printf("\nCheck if the operation with PID %d is %d euro", pid, money_transfer);
-
-		//int query_transaction = transaction_amount(pid);
+		if(!loosemessage(ttmsg, msg_type, pid)){
+			printf("\nOh, f*ck! An error... I must rollback");
 		
-
-		printf("\nSource: %d", source );
-		int index = 0;
-
-		if(isvalueinarray(pid, transaction_array, 200)){
-			index = whereisvalue(pid, transaction_array, 200);
-			transaction_array[index][source+1] = money_transfer;
-
+			rollback(pid);
+			DBMessage *ack_msg= generateMessage(getIndex(), ACK_MSG, ttmsg->getSource(), ttmsg->getReceiver(), pid, ttmsg->getAmount());
+			if (getIndex() != DB_COORDINATOR){
+				send(ack_msg, "gate$o", DB_COORDINATOR);
+				printf("\nSend rollback ACK to the coordinator");
+			}
+		}
+	}
+	
+	if (msg_type == ACK_MSG){
+		pid = ttmsg->getPid();
+		int ack_sender = ttmsg->getDb_source();
+		printf("\nReceived an ACK from DB n.%d", ack_sender);
+		int pid_index;
+		if(isvalueinarray(pid, ack_array, 200)){
+			pid_index = whereisvalue(pid, ack_array, 200);
 		}
 		else{
-
-			//db0 doesn't receive the first message from A
-			printf("\nDB.%d non ha ricevuto il primo messaggio. rimando un self_msg", getIndex());
-			TicTocMsg13 *self_msg= generateMessage(getIndex(), 0, check_sender, check_receiver, pid, money_transfer);
-			scheduleAt(simTime()+5.0, self_msg);
-
-			transaction_array[transaction_counter][0] = pid;
-			transaction_array[transaction_counter][source+1] = money_transfer;
-
-			printf("\nInserisco %d nell'array", transaction_array[transaction_counter][0]);
-			transaction_counter++;
-			index = whereisvalue(pid, transaction_array, 200);
-
-
+			ack_counter++;
+			pid_index = ack_counter;
 		}
-
-		printf("\nPid number: %d --- money:  %d ", transaction_array[index][0], transaction_array[index][source+1]);
+		ack_array[pid_index][0] = pid;
+		ack_array[pid_index][ack_sender+1] = 1;
+		//printf("\nACK? %d --- Pid: %d\n", ack_array[pid_index][ack_sender+1], ack_array[pid_index][0]);
+		
 	}
 
-
-	if(msg_type == 5){
+	if (msg_type == SELF_ACK_MSG){
+		//ack timer
+		printf("\nChecking the ACK");
 		pid = ttmsg->getPid();
-		printf("\nOh, fuck! An error... I must rollback");
-		rollback(pid);
+		amount = ttmsg->getAmount();
+		msg_source = ttmsg->getSource();
+		msg_receiver = ttmsg->getReceiver();
+		int pid_index = 0;
+
+
+		if(isvalueinarray(pid, ack_array, 200)){
+			pid_index = whereisvalue(pid, ack_array, 200);
+		}
+
+		//send the rollback another time
+		int num_of_ack=3;
+		
+		for (int k = 0; k<5; k++){
+			if (ack_array[pid_index][k] == 0){
+				num_of_ack--;
+				//resend the rollback
+				DBMessage *rollback_msg= generateMessage(getIndex(), ROLLBACK_MSG, msg_source, msg_receiver, pid, amount);
+				send(rollback_msg, "gate$o", k-1);
+				printf("\nSend the new rollback to DB n.%d", k-1 );
+
+			}
+		}
+		
+		//num_of_ack = howmanytransactions(pid, ack_array, 4);
+		
+		//num of db -1 (gate -2)
+		if(num_of_ack==GATE_SIZE-2){
+			printf("\nI have all the ACKs");
+			printf("\nSend the error message to the user");
+			UserMessage *confirm_msg = generateUserMessage(getIndex(), msg_source, pid, SOMETHING_WRONG);
+			send(confirm_msg, "gate$o", getIndex());			//send msg to A	}
+		}
+		else{
+			printf("\nThere's a problem. I've received only %d ACKs.\n Start a new timer...", num_of_ack);
+			//start ack timer
+			DBMessage *ack_timer_msg= generateMessage(getIndex(), SELF_ACK_MSG, msg_source, msg_receiver, pid, amount);
+			scheduleAt(simTime()+10.0, ack_timer_msg);
+		}
 	}
 }
 
+bool DB::loosemessage(cMessage *msg, int type, int pid){
+	if (uniform(0, 1) < 0.4) {
+        EV << "\"Losing\" message\n";
+        printf("\nDB n.%d \"Lose\" message of type %d with pid %d \n", getIndex(), type, pid);
+        bubble("message lost");  // making animation more informative...
+        delete msg;
+        return true;
+    }
+    return false;
+}
+
 void DB::rollback(int pid){
-	
 	int amount = transaction_amount(pid);
 	char sender = read_sender(pid);
 	char receiver = read_receiver(pid);	
-	printf("pid %d, sender %c, receiver %c\n",pid, sender, receiver );
+	//printf("pid %d, sender %c, receiver %c\n",pid, sender, receiver );
 
 	delete_transaction(pid);
 	update_balance(amount, receiver, sender);
@@ -373,7 +464,6 @@ void DB::delete_transaction(int pid){
 
 	mysql_close(con);
 	printf("\nTransaction number %d deleted", pid);
-
 }
 
 char DB::read_sender(int pid){
@@ -416,10 +506,10 @@ void DB::update_balance(int transaction_amount, char source, char destination){
 	char *decrease_query = create_update(decrease_part, middle_part, transaction_amount, source);
 	
 	if (mysql_query(con, decrease_query)){    
-	  finish_with_error(con);
+		finish_with_error(con);
 	}
 	else if (mysql_query(con, increase_query)){    
-	  finish_with_error(con);
+		finish_with_error(con);
 	}
 
 	mysql_close(con);
@@ -434,7 +524,7 @@ void DB::insert_transaction(int pid, char sender, char receiver, int money){
 	char *insert_query = create_insert(pid, sender, receiver, money);
 
 	if (mysql_query(con, insert_query)){    
-	  finish_with_error(con);
+		finish_with_error(con);
 	}
 
 	
@@ -620,8 +710,8 @@ int DB::read_balance_char(char* my_query, MYSQL *connection){
 		return query_balance;
 }
 
-ErrorMessage *DB::generateErrMessage(int src, char dest, int err_pid, int msg_type){
-	ErrorMessage *msg = new ErrorMessage("user_msg");
+UserMessage *DB::generateUserMessage(int src, char dest, int err_pid, int msg_type){
+	UserMessage *msg = new UserMessage("user_msg");
 	msg->setMsg_type(msg_type);
 	msg->setSource(src);
 	msg->setDestination(dest);
@@ -630,21 +720,9 @@ ErrorMessage *DB::generateErrMessage(int src, char dest, int err_pid, int msg_ty
 	return msg;
 }
 
-TicTocMsg13 *DB::generateMessage(bool flag, int pid){
-	//no
-	TicTocMsg13 *msg = new TicTocMsg13("flag_msg");
-	msg->setMsg_type(3);
-	msg->setDb_source(getIndex());
-	msg->setDestination(0);
-	msg->setFlag(flag);
-	msg->setPid(pid);
 
-	return msg;
-
-}
-
-TicTocMsg13 *DB::generateMessage(int sender, int my_type, char src, char rec, int pid, int amount){
-	TicTocMsg13 *msg = new TicTocMsg13("msg");
+DBMessage *DB::generateMessage(int sender, int my_type, char src, char rec, int pid, int amount){
+	DBMessage *msg = new DBMessage("msg");
 	msg->setAmount(amount);
 	msg->setMsg_type(my_type);
 	msg->setDb_source(sender);
@@ -652,23 +730,6 @@ TicTocMsg13 *DB::generateMessage(int sender, int my_type, char src, char rec, in
 	msg->setReceiver(rec);
 	msg->setPid(pid);
 	return msg;
-}
-
-
-
-TicTocMsg13 *DB::generateMessage(int src, int dest, int sndr_amnt, int rec_amnt, int operation_pid, char source, char receiver){
-	//no
-	TicTocMsg13 *msg = new TicTocMsg13("msg_check");
-	msg->setMsg_type(2);
-	msg->setDb_source(src);
-	msg->setDestination(dest);
-	msg->setSource(source);
-	msg->setReceiver(receiver);
-	msg->setAmount(sndr_amnt);
-	msg->setAmount2(rec_amnt);	
-	msg->setPid(operation_pid);
-	return msg;
-
 }
 
 bool DB::isvalueinarray(int val, int arr[][5], int size){
@@ -679,6 +740,7 @@ bool DB::isvalueinarray(int val, int arr[][5], int size){
 	}
 	return false;
 }
+
 
 int DB::whereisvalue(int val, int arr[][5], int size){
 	int i;
@@ -692,9 +754,8 @@ int DB::whereisvalue(int val, int arr[][5], int size){
 bool DB::arevaluesequal(int my_pid, int arr[200][5], int size){
 	int i;
 
-	printf("\nPid array: %d ---- pid numero: %d", arr[my_pid][0], my_pid);
 	for(i=1; i<size-1; i++){
-		printf("\nEQ: Pos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
+		//printf("\nEQ: Pos i: %d ---- pos i+1: %d", arr[my_pid][i], arr[my_pid][i+1]);
 		if (arr[my_pid][i] != arr[my_pid][i+1]){
 
 			return false;
@@ -707,7 +768,7 @@ int DB::howmanytransactions(int my_pid, int arr[200][5], int size){
 	int i;
 	int bound = size+1;
 	for(i=1; i<bound; i++){
-		printf("\nHOW: Pos i: %d size: %d", arr[my_pid][i], size);
+		//printf("\nHOW: Pos i: %d size: %d", arr[my_pid][i], size);
 		if (arr[my_pid][i] == 0){
 			size--;
 		}
@@ -716,12 +777,6 @@ int DB::howmanytransactions(int my_pid, int arr[200][5], int size){
 }
 
 
-void DB::forwardMessage(TicTocMsg13 *msg)
-{
-	//something
-
-	
-}
 
 
 ////////////////////// PEOPLE METHODS //////////////////////
@@ -730,18 +785,18 @@ class Person : public cSimpleModule
 {
 
   protected:
-	virtual void forwardMessage(TicTocMsg13 *msg);
 	virtual void initialize() override;
 	virtual void handleMessage(cMessage *msg);
-	virtual TicTocMsg13 *generateMessage(char src, int dest, int my_amount, char my_rec, int pid);
+	virtual DBMessage *generateMessage(char src, int dest, int my_amount, char my_rec, int pid);
 	virtual int read_pid();
 	virtual void update_pid(int new_pid);
 
   private:
 	cMessage *start;  // pointer to the event object which we'll use for timing
-	cMessage *tictocMsg;  // variable to remember the message until we send it back
+	//cMessage *DBMessage;  
 	char node_name;
-	int gate_size;
+	int GATE_SIZE;
+	bool do_operation = true;
 };
 
 Define_Module(Person);
@@ -770,8 +825,6 @@ void Person::update_pid(int pid){
 
 	fprintf(file, "%d", pid);
 	fclose(file);
-	printf("\nNew pid: %d", pid);
-
 }
 
 void Person::initialize(){
@@ -789,90 +842,92 @@ void Person::initialize(){
 
 }
 
-void Person::forwardMessage(TicTocMsg13 *msg){
-
-	int n = gateSize("gate");
-	for (int k = 0; k<n; k = k+1){
-		// $o and $i suffix is used to identify the input/output part of a two way gate
-		//TicTocMsg13 *msg_forw = generateMessage(getIndex(), k);
-		//send(msg_forw, "gate$o", k);
-		printf("Forwarding message on gate[%d]\n", k);
-
-		bubble("send message");
-	}
-	//delete msg;
-}
 
 void Person::handleMessage(cMessage *msg){
 
 	if (msg == start) {
 		
-		if (par("sendMsgOnInit").boolValue() == true) {
-		
+		if ((par("sendMsgOnInit").boolValue() == true) && do_operation) {
+			
+			
+			printf("\n---------------------------------------------");
+			printf("\nGenerate a new transaction ");
 			global_pid = read_pid();
 			global_pid++;
 			update_pid(global_pid);
-			gate_size = gateSize("gate");
+			printf("with pid %d ", global_pid);
+			GATE_SIZE = gateSize("gate");
 			int amount;
 
 			do{
 				amount = rand() % 20;
 			}while(amount==0);
-
-
+			printf("and money %d!\n", amount);
 			char receiver = 'B';
 
 			
 			//Broadcast message = 99
-			TicTocMsg13 *msg = generateMessage('A', 99, amount, receiver, global_pid);
+			DBMessage *msg_transaction = generateMessage('A', BROADCAST, amount, receiver, global_pid);
 
 			printf("Send the broadcast message to the databases\n");
-			for (int k = 0; k<gate_size; k++){
+			for (int k = 0; k<GATE_SIZE; k++){
 			// $o and $i suffix is used to identify the input/output part of a two way gate
-				TicTocMsg13 *copy = msg->dup();
+				DBMessage *copy = msg_transaction->dup();
 				send(copy, "gate$o", k);
 			
 				bubble("Send messages");
 			}
+			do_operation = false;
 
-			printf("\nSend a new message");
 			start = new cMessage("start_msg");
-			scheduleAt(simTime()+(rand() % 30), start);
+			scheduleAt(simTime()+(rand() % 20), start);
+			
 		}
+		else{
+			start = new cMessage("start_msg");
+			scheduleAt(simTime()+(rand() % 20), start);
+			}
 	}
 	else{
 
-		ErrorMessage *ttmsg = check_and_cast<ErrorMessage *>(msg);
+		UserMessage *ttmsg = check_and_cast<UserMessage *>(msg);
 		int db_msg_type = ttmsg->getMsg_type();
 		int pid_operation = ttmsg->getPid();
 		
-		printf("\nMsg from %d come back with destination %c", ttmsg->getSource(), ttmsg->getDestination());
+		printf("\n---------------------------------------------");
+		printf("\nUser %c receives a message from DB %d ", ttmsg->getDestination(), ttmsg->getSource());
 
-		if(db_msg_type == 0){
+		//0
+		if(db_msg_type == ERROR){
 			printf("\nYou can't performe operation with pid %d", pid_operation);
+			do_operation = true;
+
 		}
-		
-		if(db_msg_type == 1){
+		//1
+		if(db_msg_type == OPERATION_DONE){
 			printf("\nOperation number %d is done!", pid_operation);
+			do_operation = true;
 		}
+		//2
+		if(db_msg_type == SOMETHING_WRONG){
+			printf("\nWell, this is embarrassing! Sorry operation %d has gone wrong.", pid_operation);	
+			do_operation = true;
 
-		if(db_msg_type == 2){
-			printf("\nWell, this is embarrassing! Sorry operation %d has gone wrong.", pid_operation);
 		}
-
-		if(db_msg_type == 9){
+		//9
+		if(db_msg_type == MONEY){
 			printf("\nYou have received some money");
 		}
-		//forwardMessage(ttmsg);
 	}
 
 }
 
-TicTocMsg13 *Person::generateMessage(char src, int dest, int my_balance, char my_rec, int my_pid)
+DBMessage *Person::generateMessage(char src, int dest, int my_balance, char my_rec, int my_pid)
 {
-	TicTocMsg13 *msg = new TicTocMsg13("msg");
-	msg->setMsg_type(1);
+	DBMessage *msg = new DBMessage("transaction");
+	msg->setMsg_type(TRANSACTION_MSG);
 	msg->setSource(src);
+	msg->setDb_source(65);
 	msg->setDestination(dest);
 	msg->setAmount(my_balance);
 	msg->setReceiver(my_rec);
