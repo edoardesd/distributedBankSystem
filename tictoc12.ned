@@ -24,7 +24,7 @@ simple A extends Person{
         @display("p=50, 50");
         bool sendMsgOnInit = default(true);
         name = 65;  //A
-        delay = 20;
+        delay = 150;
 }
 
 simple B extends Person{
@@ -34,7 +34,7 @@ simple B extends Person{
         bool sendMsgOnInit = default(false);
         send_msg = default(4);
         name = 66; //B
-        delay = 100;
+        delay = 30;
 }
 
 simple C extends Person{
@@ -44,7 +44,7 @@ simple C extends Person{
         bool sendMsgOnInit = default(false);
         send_msg = default(4);
         name = 67; //C
-        delay = 5;
+        delay = 50;
 }
 
 simple D extends Person{
@@ -54,7 +54,7 @@ simple D extends Person{
         bool sendMsgOnInit = default(false);
         send_msg = default(4);
         name = 68; //D
-        delay = 50;
+        delay = 20;
 }
 
 simple E extends Person{
