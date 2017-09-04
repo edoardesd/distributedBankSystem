@@ -46,10 +46,11 @@
 #define PID_REQ 3
 #define PID_WRONG 4
 #define DELETE_PID 5
+#define SEND_TRANSACTION 6
 #define MONEY 9
 
 
-#define LOOSE_PROBABILITY 0.000001
+#define LOOSE_PROBABILITY 0.1
 
 
 using namespace omnetpp;
@@ -366,7 +367,7 @@ void DB::handleMessage(cMessage *msg){
 				bubble("Send ok msg");
 			}
 			DBMessage *copy = ok_msg->dup();
-			scheduleAt(simTime(), copy);
+			scheduleAt(simTime()+0.01, copy);
 			
 		}
 		else{
@@ -435,7 +436,7 @@ void DB::handleMessage(cMessage *msg){
 
 		if(!working){
 			printmsgqueue(msg_queue, msg_head +4);
-			printf("\nPid head: %d quindi il pid è %d", pid_head, pid_array[pid_head][0]);
+			//printf("\nPid head: %d quindi il pid è %d", pid_head, pid_array[pid_head][0]);
 			if(pid_array[pid_head][0] == 0){
 				printf("\nNo operation in queue. I'm waiting...");
 				DBMessage *start_msg= generateMessage(getIndex(), START_MSG, msg_source, msg_receiver, pid, amount);
@@ -445,7 +446,6 @@ void DB::handleMessage(cMessage *msg){
 			else{
 				if(isvalueinarray(pid_array[pid_head][0], msg_queue, 200)){
 					msg_head = whereisvalue(pid_array[pid_head][0], msg_queue, 200);
-					printf("\nMsg head dopo: %d quindi msgqueue %d", msg_head, msg_queue[msg_head][0]);
 					performTransaction(msg_queue, msg_head);
 				}
 				else{
@@ -455,7 +455,7 @@ void DB::handleMessage(cMessage *msg){
 		}
 		else {
 			printf("\nI'm working!");
-			working_delay++;
+			working_delay = working_delay +2;
 			DBMessage *start_msg= generateMessage(getIndex(), START_MSG, msg_source, msg_receiver, pid, amount);
 			scheduleAt(simTime()+working_delay, start_msg);
 		}
@@ -464,8 +464,8 @@ void DB::handleMessage(cMessage *msg){
 	if (msg_type == CHECK_MSG){
 		pid = ttmsg->getPid();
 
-		printf("\nPid: %d", pid);
-		if(!loosemessage(ttmsg, msg_type, pid)){
+		//printf("\nPid: %d", pid);
+		//if(!loosemessage(ttmsg, msg_type, pid)){
 
 			int money_transfer = ttmsg->getAmount();
 			char check_sender = ttmsg->getSource();
@@ -482,10 +482,10 @@ void DB::handleMessage(cMessage *msg){
 			}	
 			else{
 				//db0 doesn't receive the first message from A
+				working = true;
 				printf("\nDB.%d doesn't receive the first message from %c. Start the timer now", getIndex(), check_sender);
 				DBMessage *self_msg= generateMessage(getIndex(), DB_COORDINATOR, check_sender, check_receiver, pid, money_transfer);
 				scheduleAt(simTime()+5.0, self_msg);
-
 				transaction_array[transaction_counter][0] = pid;
 				transaction_array[transaction_counter][source+1] = money_transfer;
 
@@ -496,7 +496,7 @@ void DB::handleMessage(cMessage *msg){
 			}	
 
 			printf("\nPid number: %d --- money:  %d ", transaction_array[index][0], transaction_array[index][source+1]);
-		}
+		//}
 	}
 
 
@@ -506,11 +506,11 @@ void DB::handleMessage(cMessage *msg){
 			printf("\nOh, f*ck! An error... I must rollback");
 		
 			rollback(pid);
-			DBMessage *ack_msg= generateMessage(getIndex(), START_MSG, ttmsg->getSource(), ttmsg->getReceiver(), pid, ttmsg->getAmount());
+			DBMessage *ack_msg= generateMessage(getIndex(), ACK_MSG, ttmsg->getSource(), ttmsg->getReceiver(), pid, ttmsg->getAmount());
 			if (getIndex() != DB_COORDINATOR){
 				send(ack_msg, "gate$o", 0);
 				printf("\nSend rollback ACK to the coordinator");
-				working = false;
+				//working = false;
 
 			}
 		}
@@ -571,8 +571,17 @@ void DB::handleMessage(cMessage *msg){
 			printf("\nSend the error message to the user");
 			UserMessage *confirm_msg = generateUserMessage(getIndex(), msg_source, pid, SOMETHING_WRONG);
 			send(confirm_msg, "gate$o", getGate(msg_source));	
-			working = false;	
 			msg_head++;	
+
+			DBMessage *ok_msg= generateMessage(getIndex(), OK_DB, msg_source, msg_receiver, pid, amount);
+			for (int k = 1; k<DB_SIZE; k++){
+
+				DBMessage *copy = ok_msg->dup();
+				send(copy, "gate$o", k);
+				bubble("Send ok msg");
+			}
+			DBMessage *copy = ok_msg->dup();
+			scheduleAt(simTime()+0.01, copy);	
 		}
 		else{
 			printf("\nThere's a problem. I've received only %d ACKs.\n Start a new timer...", num_of_ack);
@@ -642,7 +651,7 @@ void DB::handleMessage(cMessage *msg){
 				bubble("Send delete pid msg");
 			}
 			DBMessage *copy = delete_pid_msg->dup();
-			scheduleAt(simTime(), copy);
+			scheduleAt(simTime()+0.01, copy);
 
 			//send a message to source and say "i've deleted ur pid")
 			UserMessage *delete_pid = generateUserMessage(getIndex(), msg_source, pid, DELETE_PID);
@@ -1131,15 +1140,20 @@ class Person : public cSimpleModule
 	virtual DBMessage *generateMessage(char src, int dest, int my_amount, char my_rec, int pid);
 	virtual DBMessage *askPid(char src, int dest);
 	virtual void sendTransaction(int my_pid);
+	virtual UserMessage *generateUserMessage(int src, char dest, int err_pid, int msg_type);
+
 
   private:
 	cMessage *start;  // pointer to the event object which we'll use for timing
+	cMessage *send_transaction;
 	char node_name;
 	int GATE_SIZE;
 	int delay;
 	bool do_operation = true;
 	bool wait_pid = false;
-	bool have_pid = false;
+	bool have_pid = false;	
+	int pid_operation;
+
 };
 
 Define_Module(Person);
@@ -1148,6 +1162,7 @@ Define_Module(Person);
 
 void Person::initialize(){
 	srand(time(NULL));
+
 
 	node_name = par("name");
 	delay = par("delay");
@@ -1179,9 +1194,11 @@ void Person::sendTransaction(int my_pid){
 
 		printf("The receiver is %c\n", receiver);
 		
+		if (uniform(0, 1) < LOOSE_PROBABILITY) {
+			if (node_name == 'A'){
+				my_pid = my_pid + 300;
+			}
 
-		if (node_name == 'A'){
-			my_pid = my_pid + 300;
 		}
 
 
@@ -1208,10 +1225,23 @@ void Person::sendTransaction(int my_pid){
 }
 
 void Person::handleMessage(cMessage *msg){
-
 	//if msg == return pid -> fai tutta la roba di prima (send transaction)
 	if (msg->isSelfMessage()) {
 		
+		if(msg == send_transaction){
+			//UserMessage *ttmsg = check_and_cast<UserMessage *>(msg);
+			//pid = ttmsg->getPid();
+
+			if(node_name != 'C') {
+				sendTransaction(pid_operation);
+			}
+			else {
+				if (uniform(0, 1) > LOOSE_PROBABILITY) {
+					sendTransaction(pid_operation);
+				}
+			}
+		}
+		else{
 		if(wait_pid){
 			printf("User %c wait the pid\n", node_name);
 			start = new cMessage("wait_pid_msg");
@@ -1226,13 +1256,14 @@ void Person::handleMessage(cMessage *msg){
 
 			wait_pid = true;
 		}
+		}
 
 	}
 	else{
 		UserMessage *ttmsg = check_and_cast<UserMessage *>(msg);
 		int db_msg_type = ttmsg->getMsg_type();
-		int pid_operation = ttmsg->getPid();
-		
+		pid_operation = ttmsg->getPid();
+
 		printf("\n---------------------------------------------");
 		printf("\nUser %c (dest msg: %c) receives a message from DB %d ",node_name, ttmsg->getDestination(), ttmsg->getSource());
 
@@ -1240,37 +1271,63 @@ void Person::handleMessage(cMessage *msg){
 		if(db_msg_type == ERROR){
 			printf("\nYou can't performe operation with pid %d", pid_operation);
 			do_operation = true;
+			wait_pid = false;
+
 
 		}
 		//1
 		if(db_msg_type == OPERATION_DONE){
 			printf("\nOperation number %d is done!", pid_operation);
 			do_operation = true;
+			wait_pid = false;
+
+
 		}
 		//2
 		if(db_msg_type == SOMETHING_WRONG){
 			printf("\nWell, this is embarrassing! Sorry operation %d has gone wrong.", pid_operation);	
 			do_operation = true;
+			wait_pid = false;
+
 
 		}
 		//9
 		if(db_msg_type == MONEY){
 			printf("\nYou have received some money");
+			wait_pid = false;
+
 		}
 
 		//4
 		if(db_msg_type == PID_WRONG){
 			printf("\nThe pid %d is wrong!", pid_operation);
+			pid_operation = ttmsg->getPid();
+
+			wait_pid = false;
+
 		}
 
 		//3
 		if(db_msg_type == PID_REQ){
 			printf("\nYou have received the PID number: %d!", pid_operation);
 			have_pid = true;
-			wait_pid = false;
+			wait_pid = true;
 
+
+			send_transaction = new cMessage("send_tr");
+			//UserMessage *send_transaction = generateUserMessage(getIndex(), 'k', pid_operation, SEND_TRANSACTION);			
+			scheduleAt(simTime()+(rand() % 10), send_transaction);	
+			
+		}
+
+		if(db_msg_type == SEND_TRANSACTION){
 			if(node_name != 'C') {
 				sendTransaction(pid_operation);
+			}
+			else {
+				if (uniform(0, 1) > LOOSE_PROBABILITY) {
+					sendTransaction(pid_operation);
+				}
 			}
 		}
 
@@ -1308,6 +1365,16 @@ DBMessage *Person::askPid(char src, int dest)
 	msg->setSource(src);
 	msg->setDb_source(node_name); //per vedere se riesco a togliere una delle due sources
 	msg->setDestination(dest);
+	return msg;
+}
+
+UserMessage *Person::generateUserMessage(int src, char dest, int err_pid, int msg_type){
+	UserMessage *msg = new UserMessage("user_msg");
+	msg->setMsg_type(msg_type);
+	msg->setSource(src);
+	msg->setDestination(dest);
+	msg->setPid(err_pid);
+
 	return msg;
 }
 
